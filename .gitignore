@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual Environment
+venv/
+env/
+.venv/
+ENV/
+
+# Environment Variables
+.env
+*.env
+!.env.example
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# PM2
+.pm2/
+
+# Forensic Platform — Runtime Data
+backend/uploads/
+backend/reports/
+backend/recovered/
+backend/.wrangler/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Coverage
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Large forensic images (never commit)
+*.e01
+*.dd
+*.raw
+*.img
+*.vmdk
+*.vhd
+*.iso
