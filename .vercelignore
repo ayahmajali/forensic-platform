@@ -1,22 +1,27 @@
-# These folders are generated at runtime — never deploy them
+# Runtime-generated folders — never deploy these
 backend/uploads/
 backend/reports/
 backend/recovered/
 backend/__pycache__/
 backend/modules/__pycache__/
 
-# Dev tools
-.git/
-node_modules/
+# Python cache
 *.pyc
 *.pyo
 __pycache__/
+
+# Dev tools
+.git/
+node_modules/
 .env
 
-# Large test files
+# Large forensic image files
 *.e01
 *.dd
 *.raw
 *.img
 *.iso
 *.vmdk
+
+# Old api/ entrypoint (replaced by root index.py)
+api/
