@@ -77,14 +77,24 @@ app.add_middleware(
 )
 
 # Mount static files (always available — they're in the repo)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+try:
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+except Exception as e:
+    print(f"[WARN] Could not mount /static: {e}")
 
-# Mount writable dirs only if they exist and have content
-# (on Vercel these are /tmp dirs, served differently)
-if REPORTS_DIR.exists():
-    app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
-if RECOVERED_DIR.exists():
-    app.mount("/recovered", StaticFiles(directory=str(RECOVERED_DIR)), name="recovered")
+# Mount writable dirs — ONLY on local dev (Vercel uses /api/report-file/ instead)
+# StaticFiles crashes on empty dirs, so we skip mounting on Vercel entirely
+if not IS_VERCEL:
+    try:
+        if REPORTS_DIR.exists() and any(REPORTS_DIR.iterdir()):
+            app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+    except Exception as e:
+        print(f"[WARN] Could not mount /reports: {e}")
+    try:
+        if RECOVERED_DIR.exists() and any(RECOVERED_DIR.iterdir()):
+            app.mount("/recovered", StaticFiles(directory=str(RECOVERED_DIR)), name="recovered")
+    except Exception as e:
+        print(f"[WARN] Could not mount /recovered: {e}")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -473,6 +483,13 @@ async def health():
         tools[tool] = shutil.which(tool) is not None
     return JSONResponse({"status": "healthy", "tools": tools, "timestamp": datetime.now().isoformat()})
 
+
+# ── Vercel ASGI handler (Mangum wraps FastAPI for AWS Lambda / Vercel) ──
+try:
+    from mangum import Mangum
+    handler = Mangum(app, lifespan="off")
+except ImportError:
+    handler = None  # Not on Vercel
 
 if __name__ == "__main__":
     import uvicorn
