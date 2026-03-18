@@ -2,279 +2,636 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <meta name="theme-color" content="#2563eb"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
   <title>Digital Forensics Investigation Platform</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔍</text></svg>"/>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
   <style>
+    /* ════════════════════════════════════════
+       DESIGN TOKENS
+    ════════════════════════════════════════ */
     :root {
-      --primary: #2563eb;
+      --primary:      #2563eb;
       --primary-dark: #1d4ed8;
-      --bg: #f0f4f8;
-      --surface: #ffffff;
-      --border: #e2e8f0;
-      --text: #1e293b;
-      --text-muted: #64748b;
-      --success: #16a34a;
-      --danger: #dc2626;
-      --warning: #d97706;
-      --purple: #7c3aed;
-      --radius: 12px;
-      --shadow: 0 2px 12px rgba(0,0,0,.08);
-      --shadow-lg: 0 8px 32px rgba(0,0,0,.12);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-    body {
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      background: var(--bg); color: var(--text); min-height: 100vh;
+      --primary-light:#eff6ff;
+      --bg:           #f0f4f8;
+      --surface:      #ffffff;
+      --border:       #e2e8f0;
+      --text:         #1e293b;
+      --text-muted:   #64748b;
+      --success:      #16a34a;
+      --danger:       #dc2626;
+      --warning:      #d97706;
+      --purple:       #7c3aed;
+      --radius:       12px;
+      --radius-sm:    8px;
+      --shadow:       0 2px 12px rgba(0,0,0,.08);
+      --shadow-lg:    0 8px 32px rgba(0,0,0,.14);
+      --nav-h:        60px;
     }
 
-    /* ──── NAV ──── */
+    /* ════════════════════════════════════════
+       RESET
+    ════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    img, video { max-width: 100%; display: block; }
+    button { font-family: inherit; }
+
+    /* ════════════════════════════════════════
+       NAV
+    ════════════════════════════════════════ */
     nav {
       background: var(--surface);
       border-bottom: 1px solid var(--border);
-      padding: 0 32px;
-      height: 64px;
-      display: flex; align-items: center;
+      height: var(--nav-h);
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 200;
       box-shadow: var(--shadow);
-      position: sticky; top: 0; z-index: 100;
     }
     .nav-brand {
-      display: flex; align-items: center; gap: 12px;
-      font-size: 20px; font-weight: 800; color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
       text-decoration: none;
+      color: var(--primary);
+      font-size: 17px;
+      font-weight: 800;
+      flex-shrink: 0;
     }
-    .nav-brand .logo-icon { font-size: 28px; }
-    .nav-brand .brand-sub { font-size: 11px; font-weight: 400; color: var(--text-muted); display: block; line-height: 1; }
-    .nav-actions { margin-left: auto; display: flex; gap: 12px; align-items: center; }
-    .btn { padding: 8px 18px; border-radius: 8px; border: none; cursor: pointer;
-      font-size: 13px; font-weight: 600; transition: all .15s; display: inline-flex; align-items: center; gap: 6px; }
-    .btn-primary { background: var(--primary); color: #fff; }
-    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
-    .btn-outline { background: transparent; color: var(--primary); border: 1.5px solid var(--primary); }
-    .btn-outline:hover { background: #eff6ff; }
-    .badge-nav { background: #fee2e2; color: #b91c1c; border-radius: 20px; padding: 2px 10px; font-size: 11px; font-weight: 700; }
+    .nav-brand .logo-icon { font-size: 24px; }
+    .nav-brand .brand-wrap { display: flex; flex-direction: column; line-height: 1.15; }
+    .nav-brand .brand-sub { font-size: 10px; font-weight: 400; color: var(--text-muted); }
+    .nav-spacer { flex: 1; }
+    .badge-nav {
+      background: #fee2e2; color: #b91c1c;
+      border-radius: 20px; padding: 3px 10px;
+      font-size: 10px; font-weight: 700;
+      white-space: nowrap;
+      display: none;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: var(--radius-sm);
+      border: none; cursor: pointer;
+      font-size: 13px; font-weight: 600;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .btn-outline {
+      background: transparent;
+      color: var(--primary);
+      border: 1.5px solid var(--primary);
+    }
+    .btn-outline:hover { background: var(--primary-light); }
+    /* hide label on tiny screens, keep icon */
+    .btn-outline .btn-label { display: inline; }
 
-    /* ──── HERO ──── */
+    /* ════════════════════════════════════════
+       HERO
+    ════════════════════════════════════════ */
     .hero {
-      background: linear-gradient(135deg, #1e1b4b 0%, #1e3a5f 50%, #0f172a 100%);
-      padding: 64px 32px;
+      background: linear-gradient(135deg,#1e1b4b 0%,#1e3a5f 55%,#0f172a 100%);
+      padding: 56px 20px 72px;
       text-align: center;
-      position: relative; overflow: hidden;
+      position: relative;
+      overflow: hidden;
     }
     .hero::before {
       content: '';
       position: absolute; inset: 0;
-      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
     }
-    .hero-content { position: relative; max-width: 720px; margin: 0 auto; }
-    .hero-badge { display: inline-flex; align-items: center; gap: 8px;
-      background: rgba(255,255,255,.1); color: #a5b4fc; border: 1px solid rgba(165,180,252,.3);
-      padding: 6px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; margin-bottom: 20px; }
-    .hero h1 { font-size: 42px; font-weight: 900; color: #fff; line-height: 1.15; margin-bottom: 16px; }
+    .hero-content { position: relative; max-width: 700px; margin: 0 auto; }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(255,255,255,.1);
+      color: #a5b4fc;
+      border: 1px solid rgba(165,180,252,.3);
+      padding: 5px 14px; border-radius: 20px;
+      font-size: 11px; font-weight: 600;
+      margin-bottom: 18px;
+    }
+    .hero h1 {
+      font-size: clamp(26px, 5vw, 42px);
+      font-weight: 900; color: #fff;
+      line-height: 1.2; margin-bottom: 14px;
+    }
     .hero h1 span { color: #60a5fa; }
-    .hero p { font-size: 17px; color: #94a3b8; line-height: 1.7; margin-bottom: 32px; }
-    .hero-features { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; margin-bottom: 40px; }
-    .hero-feat { display: flex; align-items: center; gap: 8px; color: #94a3b8; font-size: 13px; }
-    .hero-feat i { color: #60a5fa; }
+    .hero p {
+      font-size: clamp(14px, 2.5vw, 17px);
+      color: #94a3b8; line-height: 1.7;
+      margin-bottom: 28px;
+      padding: 0 4px;
+    }
+    .hero-features {
+      display: flex; gap: 12px 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 0;
+    }
+    .hero-feat {
+      display: flex; align-items: center; gap: 6px;
+      color: #94a3b8; font-size: 12px;
+    }
+    .hero-feat i { color: #60a5fa; font-size: 11px; }
 
-    /* ──── UPLOAD AREA ──── */
+    /* ════════════════════════════════════════
+       UPLOAD CARD (lifts over hero)
+    ════════════════════════════════════════ */
+    .page-wrap {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 0 16px;
+    }
     .upload-area {
-      background: var(--surface); border-radius: var(--radius);
-      box-shadow: var(--shadow-lg); padding: 48px;
-      max-width: 780px; margin: -32px auto 0; position: relative; z-index: 10;
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      padding: 28px 24px;
+      margin-top: -36px;
+      position: relative;
+      z-index: 10;
     }
-    .upload-zone {
-      border: 2.5px dashed var(--border); border-radius: var(--radius);
-      padding: 48px 24px; text-align: center; cursor: pointer;
-      transition: all .25s; position: relative; background: #f8fafc;
-    }
-    .upload-zone:hover, .upload-zone.drag-over {
-      border-color: var(--primary); background: #eff6ff;
-    }
-    .upload-zone input[type=file] {
-      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
-    }
-    .upload-icon { font-size: 52px; color: var(--primary); margin-bottom: 16px; opacity: .7; }
-    .upload-zone h3 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
-    .upload-zone p { font-size: 14px; color: var(--text-muted); }
-    .supported-types { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
-    .type-badge { background: #f1f5f9; color: var(--text-muted); border-radius: 6px;
-      padding: 3px 10px; font-size: 11px; font-weight: 700; font-family: monospace; }
 
-    /* Selected file */
-    .file-selected { display: none; align-items: center; gap: 16px;
-      padding: 16px 20px; background: #f0fdf4; border: 1.5px solid #86efac;
-      border-radius: 10px; margin-top: 16px; }
+    /* Upload zone */
+    .upload-zone {
+      border: 2.5px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 36px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all .25s;
+      position: relative;
+      background: #f8fafc;
+      /* touch friendly */
+      -webkit-tap-highlight-color: transparent;
+    }
+    .upload-zone:hover,
+    .upload-zone.drag-over { border-color: var(--primary); background: var(--primary-light); }
+    .upload-zone input[type=file] {
+      position: absolute; inset: 0;
+      opacity: 0; cursor: pointer;
+      width: 100%; height: 100%;
+    }
+    .upload-icon { font-size: 46px; color: var(--primary); margin-bottom: 12px; opacity: .75; }
+    .upload-zone h3 { font-size: 17px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .upload-zone p  { font-size: 13px; color: var(--text-muted); }
+    .supported-types {
+      display: flex; gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+    .type-badge {
+      background: #f1f5f9; color: var(--text-muted);
+      border-radius: 6px; padding: 3px 9px;
+      font-size: 10px; font-weight: 700;
+      font-family: monospace;
+    }
+
+    /* File selected strip */
+    .file-selected {
+      display: none; align-items: center; gap: 12px;
+      padding: 13px 16px;
+      background: #f0fdf4;
+      border: 1.5px solid #86efac;
+      border-radius: 10px;
+      margin-top: 14px;
+    }
     .file-selected.show { display: flex; }
-    .file-selected i { font-size: 28px; color: var(--success); }
-    .file-info h4 { font-size: 14px; font-weight: 700; color: var(--text); }
-    .file-info p { font-size: 12px; color: var(--text-muted); }
-    .file-remove { margin-left: auto; background: none; border: none; cursor: pointer;
-      color: var(--text-muted); font-size: 18px; }
+    .file-selected > i { font-size: 26px; color: var(--success); flex-shrink: 0; }
+    .file-info { min-width: 0; flex: 1; }
+    .file-info h4 {
+      font-size: 13px; font-weight: 700;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-info p { font-size: 11px; color: var(--text-muted); }
+    .file-remove {
+      margin-left: auto; background: none;
+      border: none; cursor: pointer;
+      color: var(--text-muted); font-size: 18px;
+      padding: 4px 6px;
+      flex-shrink: 0;
+    }
     .file-remove:hover { color: var(--danger); }
 
-    /* Options */
-    .form-options { margin-top: 20px; display: grid; gap: 14px; }
-    .form-group label { display: block; font-size: 12px; font-weight: 700;
-      color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
-    .form-control { width: 100%; padding: 10px 14px; border: 1.5px solid var(--border);
-      border-radius: 8px; font-size: 13px; outline: none; transition: border-color .2s;
-      background: var(--surface); color: var(--text); }
+    /* Form */
+    .form-options { margin-top: 18px; display: grid; gap: 14px; }
+    .form-group label {
+      display: block; font-size: 11px; font-weight: 700;
+      color: var(--text-muted); margin-bottom: 6px;
+      text-transform: uppercase; letter-spacing: .05em;
+    }
+    .form-control {
+      width: 100%; padding: 10px 13px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 14px; outline: none;
+      transition: border-color .2s;
+      background: var(--surface); color: var(--text);
+      /* better touch target */
+      min-height: 44px;
+    }
     .form-control:focus { border-color: var(--primary); }
-    .openai-row { display: flex; gap: 10px; }
+    .openai-row { display: flex; gap: 8px; }
     .openai-row .form-control { flex: 1; }
+    .openai-row .btn { flex-shrink: 0; min-height: 44px; }
 
     .btn-analyze {
-      width: 100%; padding: 16px; border-radius: 10px; border: none;
+      width: 100%; padding: 15px 20px;
+      border-radius: var(--radius-sm);
+      border: none;
       background: linear-gradient(135deg, #2563eb, #7c3aed);
-      color: #fff; font-size: 16px; font-weight: 800; cursor: pointer;
+      color: #fff; font-size: 16px; font-weight: 800;
+      cursor: pointer;
       display: flex; align-items: center; justify-content: center; gap: 10px;
-      transition: all .2s; margin-top: 20px; letter-spacing: .02em;
+      transition: all .2s; margin-top: 18px;
+      letter-spacing: .02em;
+      min-height: 52px;
+      -webkit-tap-highlight-color: transparent;
     }
-    .btn-analyze:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(37,99,235,.4); }
-    .btn-analyze:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+    .btn-analyze:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(37,99,235,.4);
+    }
+    .btn-analyze:disabled { opacity: .55; cursor: not-allowed; }
 
-    /* ──── PROGRESS ──── */
-    .progress-section {
-      max-width: 780px; margin: 24px auto;
-      display: none;
-    }
+    /* ════════════════════════════════════════
+       PROGRESS CARD
+    ════════════════════════════════════════ */
+    .progress-section { display: none; margin-top: 20px; }
     .progress-section.show { display: block; }
     .progress-card {
-      background: var(--surface); border-radius: var(--radius);
-      box-shadow: var(--shadow); padding: 28px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 22px 20px;
     }
-    .progress-header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
-    .progress-spinner { width: 36px; height: 36px; border: 3px solid #e2e8f0;
-      border-top-color: var(--primary); border-radius: 50%;
-      animation: spin 0.8s linear infinite; }
+    .progress-header {
+      display: flex; align-items: flex-start; gap: 14px;
+      margin-bottom: 18px;
+    }
+    .progress-spinner {
+      width: 34px; height: 34px; flex-shrink: 0;
+      border: 3px solid #e2e8f0;
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      margin-top: 2px;
+    }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .progress-title { font-size: 16px; font-weight: 700; }
-    .progress-sub { font-size: 13px; color: var(--text-muted); }
-    .progress-bar-wrap { background: #e2e8f0; border-radius: 100px; height: 8px; overflow: hidden; }
-    .progress-bar { height: 100%; background: linear-gradient(90deg, var(--primary), var(--purple));
-      border-radius: 100px; transition: width .4s ease; width: 0%; }
-    .progress-pct { text-align: right; font-size: 12px; font-weight: 700;
-      color: var(--primary); margin-top: 6px; }
-    .progress-log {
-      background: #1e293b; border-radius: 8px; padding: 14px 16px;
-      margin-top: 16px; max-height: 180px; overflow-y: auto; font-family: monospace; font-size: 12px;
+    .progress-title { font-size: 15px; font-weight: 700; }
+    .progress-sub {
+      font-size: 12px; color: var(--text-muted);
+      margin-top: 3px; line-height: 1.5;
+      word-break: break-word;
     }
-    .log-line { color: #94a3b8; margin: 2px 0; }
+    .progress-bar-wrap {
+      background: #e2e8f0; border-radius: 100px; height: 8px; overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--purple));
+      border-radius: 100px; transition: width .4s ease; width: 0%;
+    }
+    .progress-pct {
+      text-align: right; font-size: 12px; font-weight: 700;
+      color: var(--primary); margin-top: 5px;
+    }
+    .progress-log {
+      background: #1e293b; border-radius: 8px;
+      padding: 12px 14px;
+      margin-top: 14px;
+      max-height: 160px; overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+    }
+    .log-line { color: #94a3b8; margin: 2px 0; line-height: 1.5; }
     .log-line.success { color: #4ade80; }
-    .log-line.error { color: #f87171; }
+    .log-line.error   { color: #f87171; }
 
-    /* ──── JOBS LIST ──── */
-    .jobs-section { max-width: 780px; margin: 32px auto 0; }
-    .jobs-title { font-size: 15px; font-weight: 800; color: var(--text); margin-bottom: 14px;
-      display: flex; align-items: center; gap: 8px; }
+    /* ════════════════════════════════════════
+       JOBS LIST
+    ════════════════════════════════════════ */
+    .jobs-section { margin-top: 28px; }
+    .jobs-title {
+      font-size: 14px; font-weight: 800;
+      color: var(--text); margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
     .job-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 18px 20px; margin-bottom: 12px;
-      box-shadow: var(--shadow); display: flex; align-items: center; gap: 16px;
-      transition: all .15s;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: box-shadow .15s;
     }
     .job-card:hover { box-shadow: var(--shadow-lg); }
-    .job-icon { width: 44px; height: 44px; border-radius: 10px;
-      background: #eff6ff; color: var(--primary); display: flex; align-items: center;
-      justify-content: center; font-size: 20px; flex-shrink: 0; }
-    .job-icon.completed { background: #f0fdf4; color: var(--success); }
-    .job-icon.failed { background: #fff5f5; color: var(--danger); }
-    .job-icon.running { background: #fef3c7; color: var(--warning); }
-    .job-details { flex: 1; min-width: 0; }
-    .job-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .job-meta { display: flex; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
-    .job-meta span { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
-    .job-actions { display: flex; gap: 8px; flex-shrink: 0; }
-    .btn-sm { padding: 6px 14px; font-size: 12px; }
-    .btn-report { background: var(--primary); color: #fff; }
-    .btn-report:hover { background: var(--primary-dark); }
-    .btn-delete { background: #fff5f5; color: var(--danger); border: 1px solid #fecaca; }
-    .btn-delete:hover { background: #fee2e2; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .status-running { background: var(--warning); animation: pulse 1s infinite; }
-    .status-completed { background: var(--success); }
-    .status-failed { background: var(--danger); }
-    .status-queued { background: #94a3b8; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-
-    /* ──── FEATURES ──── */
-    .features-section {
-      max-width: 1100px; margin: 64px auto;
-      padding: 0 32px;
+    .job-icon {
+      width: 42px; height: 42px; flex-shrink: 0;
+      border-radius: 10px;
+      background: var(--primary-light); color: var(--primary);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
     }
-    .features-title { text-align: center; font-size: 30px; font-weight: 900;
-      color: var(--text); margin-bottom: 8px; }
-    .features-sub { text-align: center; color: var(--text-muted); margin-bottom: 40px; font-size: 15px; }
-    .features-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
-    .feat-card { background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow);
-      transition: all .2s; }
-    .feat-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--primary); }
-    .feat-icon { width: 52px; height: 52px; border-radius: 12px; display: flex;
-      align-items: center; justify-content: center; font-size: 24px; margin-bottom: 14px; }
-    .icon-blue { background: #dbeafe; color: var(--primary); }
-    .icon-red { background: #fee2e2; color: var(--danger); }
-    .icon-green { background: #dcfce7; color: var(--success); }
+    .job-icon.completed { background: #f0fdf4; color: var(--success); }
+    .job-icon.failed    { background: #fff5f5; color: var(--danger); }
+    .job-icon.running   { background: #fef3c7; color: var(--warning); }
+    .job-details { flex: 1; min-width: 0; }
+    .job-name {
+      font-size: 13px; font-weight: 700;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .job-meta {
+      display: flex; gap: 8px 14px;
+      margin-top: 4px; flex-wrap: wrap;
+    }
+    .job-meta span {
+      font-size: 11px; color: var(--text-muted);
+      display: flex; align-items: center; gap: 3px;
+    }
+    /* On mobile, stack actions below details */
+    .job-actions {
+      display: flex; gap: 6px; flex-shrink: 0;
+      align-self: flex-start;
+    }
+    .btn-sm { padding: 6px 12px; font-size: 12px; min-height: 34px; }
+    .btn-report { background: var(--primary); color: #fff; border: none; }
+    .btn-report:hover { background: var(--primary-dark); }
+    .btn-delete {
+      background: #fff5f5; color: var(--danger);
+      border: 1px solid #fecaca;
+    }
+    .btn-delete:hover { background: #fee2e2; }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%; display: inline-block;
+    }
+    .status-running   { background: var(--warning); animation: pulse 1s infinite; }
+    .status-completed { background: var(--success); }
+    .status-failed    { background: var(--danger); }
+    .status-queued    { background: #94a3b8; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    /* ════════════════════════════════════════
+       FEATURES SECTION
+    ════════════════════════════════════════ */
+    .features-section {
+      max-width: 1100px;
+      margin: 56px auto;
+      padding: 0 16px;
+    }
+    .features-title {
+      text-align: center; font-size: clamp(22px,4vw,30px);
+      font-weight: 900; color: var(--text);
+      margin-bottom: 6px;
+    }
+    .features-sub {
+      text-align: center; color: var(--text-muted);
+      margin-bottom: 32px; font-size: 14px;
+    }
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px,1fr));
+      gap: 16px;
+    }
+    .feat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow);
+      transition: all .2s;
+    }
+    .feat-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--primary);
+    }
+    .feat-icon {
+      width: 48px; height: 48px; border-radius: 11px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 12px;
+    }
+    .icon-blue   { background: #dbeafe; color: var(--primary); }
+    .icon-red    { background: #fee2e2; color: var(--danger); }
+    .icon-green  { background: #dcfce7; color: var(--success); }
     .icon-orange { background: #fef3c7; color: var(--warning); }
     .icon-purple { background: #ede9fe; color: var(--purple); }
-    .icon-teal { background: #cffafe; color: #0891b2; }
-    .feat-title { font-size: 15px; font-weight: 800; margin-bottom: 8px; }
-    .feat-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
-    .feat-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
-    .feat-tag { background: #f1f5f9; color: var(--text-muted); font-size: 11px;
-      padding: 2px 8px; border-radius: 4px; font-family: monospace; }
-
-    /* ──── TOAST ──── */
-    .toast { position: fixed; bottom: 24px; right: 24px; z-index: 9999;
-      background: var(--text); color: #fff; padding: 14px 20px; border-radius: 10px;
-      font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 10px;
-      box-shadow: var(--shadow-lg); transform: translateY(100px); opacity: 0;
-      transition: all .3s; max-width: 340px; }
-    .toast.show { transform: translateY(0); opacity: 1; }
-    .toast.success { background: var(--success); }
-    .toast.error { background: var(--danger); }
-
-    /* ──── FOOTER ──── */
-    footer {
-      text-align: center; padding: 32px; color: var(--text-muted);
-      font-size: 13px; border-top: 1px solid var(--border);
-      background: var(--surface); margin-top: 64px;
+    .icon-teal   { background: #cffafe; color: #0891b2; }
+    .feat-title  { font-size: 14px; font-weight: 800; margin-bottom: 7px; }
+    .feat-desc   { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+    .feat-tags   { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+    .feat-tag {
+      background: #f1f5f9; color: var(--text-muted);
+      font-size: 10px; padding: 2px 7px;
+      border-radius: 4px; font-family: monospace;
     }
 
-    /* ──── MISC ──── */
-    .container { max-width: 1200px; margin: 0 auto; padding: 0 32px; }
+    /* ════════════════════════════════════════
+       TOAST
+    ════════════════════════════════════════ */
+    .toast {
+      position: fixed; bottom: 20px; right: 16px;
+      left: 16px;                          /* full-width on mobile */
+      z-index: 9999;
+      background: var(--text); color: #fff;
+      padding: 13px 18px; border-radius: 10px;
+      font-size: 13px; font-weight: 600;
+      display: flex; align-items: center; gap: 10px;
+      box-shadow: var(--shadow-lg);
+      transform: translateY(140px); opacity: 0;
+      transition: all .3s;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { background: var(--success); }
+    .toast.error   { background: var(--danger); }
+
+    /* ════════════════════════════════════════
+       FOOTER
+    ════════════════════════════════════════ */
+    footer {
+      text-align: center;
+      padding: 28px 16px;
+      color: var(--text-muted);
+      font-size: 12px;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      margin-top: 56px;
+      line-height: 1.8;
+    }
+    footer .footer-brand {
+      font-size: 15px; font-weight: 700;
+      color: var(--text); margin-bottom: 4px;
+    }
+
+    /* ════════════════════════════════════════
+       RESPONSIVE — tablet ≤ 768px
+    ════════════════════════════════════════ */
     @media (max-width: 768px) {
-      .hero h1 { font-size: 28px; }
-      .upload-area { padding: 28px 20px; margin: -16px 16px 0; }
-      .jobs-section, .features-section { margin: 24px 16px; }
+      nav { padding: 0 14px; }
+      .btn-outline .btn-label { display: none; }   /* icon-only on nav */
+      .btn-outline { padding: 7px 10px; }
+
+      .hero { padding: 40px 16px 60px; }
+
+      .upload-area {
+        padding: 20px 16px;
+        margin-top: -28px;
+        border-radius: 10px;
+      }
+      .upload-zone { padding: 28px 12px; }
+      .upload-icon { font-size: 38px; }
+
+      .features-grid { grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); }
+
+      .job-card { flex-wrap: wrap; }
+      .job-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+
+      .toast { right: 12px; left: 12px; bottom: 72px; }  /* above bottom nav */
+    }
+
+    /* ════════════════════════════════════════
+       RESPONSIVE — phone ≤ 480px
+    ════════════════════════════════════════ */
+    @media (max-width: 480px) {
+      .hero-badge { font-size: 10px; padding: 4px 10px; }
+      .hero h1 { font-size: 24px; }
+      .hero p  { font-size: 13px; }
+
+      .form-control { font-size: 16px; } /* prevents iOS auto-zoom */
+
+      .btn-analyze { font-size: 15px; padding: 13px; }
+
+      .progress-card  { padding: 16px 14px; }
+      .progress-title { font-size: 14px; }
+
+      .job-card { padding: 12px; }
+      .job-name { font-size: 12px; }
+    }
+
+    /* ════════════════════════════════════════
+       BOTTOM NAV BAR (mobile only, ≤ 600px)
+    ════════════════════════════════════════ */
+    .bottom-nav {
+      display: none;
+      position: fixed; bottom: 0; left: 0; right: 0;
+      z-index: 300;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      box-shadow: 0 -2px 12px rgba(0,0,0,.10);
+      padding: 0;
+      height: 58px;
+    }
+    .bottom-nav-inner {
+      display: flex; height: 100%;
+    }
+    .bnav-item {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 3px;
+      background: none; border: none; cursor: pointer;
+      color: var(--text-muted); font-size: 10px; font-weight: 600;
+      text-decoration: none;
+      -webkit-tap-highlight-color: transparent;
+      transition: color .15s;
+      padding: 6px 0;
+    }
+    .bnav-item i { font-size: 18px; }
+    .bnav-item:active,
+    .bnav-item.active { color: var(--primary); }
+    .bnav-item.bnav-analyze {
+      color: #fff;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 14px;
+      margin: 6px 8px;
+      padding: 4px 0;
+      flex: 1.3;
+    }
+    .bnav-item.bnav-analyze:active { opacity: .85; }
+
+    /* ════════════════════════════════════════
+       EXTRA SMALL (≤ 380px)
+    ════════════════════════════════════════ */
+    @media (max-width: 380px) {
+      .hero h1 { font-size: 20px; }
+      .hero p  { font-size: 12px; }
+      .hero-badge { font-size: 9px; }
+      .hero-feat  { font-size: 11px; }
+      .features-grid { grid-template-columns: 1fr; }
+      .feat-card { padding: 16px; }
+      .feat-icon { width: 40px; height: 40px; font-size: 18px; }
+      .job-card  { padding: 10px; }
+      .job-name  { font-size: 11px; }
+      .job-meta span { font-size: 10px; }
+      .btn-sm    { padding: 5px 9px; font-size: 11px; }
+    }
+
+    /* Show bottom nav + add body padding on phones */
+    @media (max-width: 600px) {
+      .bottom-nav { display: block; }
+      body { padding-bottom: 58px; }
+      /* shrink upload padding so it fits small screens */
+      .upload-area { padding: 14px 12px; margin-top: -16px; }
+      .upload-zone { padding: 22px 10px; }
+      .upload-icon { font-size: 34px; }
+      .upload-zone h3 { font-size: 14px; }
+      .upload-zone p  { font-size: 11px; }
+      .supported-types { gap: 4px; }
+      .type-badge { font-size: 9px; padding: 2px 7px; }
+      /* hide features section hero feats on very small screens */
+      .hero-features { gap: 8px 14px; }
     }
   </style>
 </head>
 <body>
 
-<!-- NAV -->
+<!-- ══════════ NAV ══════════ -->
 <nav>
   <a class="nav-brand" href="/">
     <i class="fas fa-search-plus logo-icon"></i>
-    <div>
-      <div>ForensicPlatform</div>
+    <div class="brand-wrap">
+      <span>ForensicPlatform</span>
       <span class="brand-sub">Digital Investigation System</span>
     </div>
   </a>
-  <div class="nav-actions">
-    <span id="toolStatus" class="badge-nav" style="display:none">
-      <i class="fas fa-exclamation-triangle"></i> TSK Not Installed
-    </span>
-    <button class="btn btn-outline" onclick="checkHealth()">
-      <i class="fas fa-heartbeat"></i> System Status
-    </button>
-  </div>
+  <div class="nav-spacer"></div>
+  <span id="toolStatus" class="badge-nav">
+    <i class="fas fa-exclamation-triangle"></i> TSK Missing
+  </span>
+  <button class="btn btn-outline" onclick="checkHealth()" title="System Status">
+    <i class="fas fa-heartbeat"></i>
+    <span class="btn-label">Status</span>
+  </button>
 </nav>
 
-<!-- HERO -->
+<!-- ══════════ HERO ══════════ -->
 <div class="hero">
   <div class="hero-content">
     <div class="hero-badge">
@@ -282,27 +639,30 @@
       Professional Digital Forensics Platform
     </div>
     <h1>Investigate Digital Evidence<br/><span>Like a Pro</span></h1>
-    <p>Upload disk images, logical files, or forensic containers. Our platform automatically runs 
-       Sleuth Kit analysis, recovers files, extracts artifacts, and generates detailed investigation reports.</p>
+    <p>Upload disk images, logical files, or forensic containers. Automatic Sleuth Kit analysis,
+       file recovery, artifact extraction, and AI-powered reports.</p>
     <div class="hero-features">
-      <div class="hero-feat"><i class="fas fa-check"></i> Disk Image Analysis</div>
+      <div class="hero-feat"><i class="fas fa-check"></i> Disk Analysis</div>
       <div class="hero-feat"><i class="fas fa-check"></i> File Recovery</div>
       <div class="hero-feat"><i class="fas fa-check"></i> Browser Artifacts</div>
-      <div class="hero-feat"><i class="fas fa-check"></i> Timeline Builder</div>
-      <div class="hero-feat"><i class="fas fa-check"></i> AI Summarization</div>
+      <div class="hero-feat"><i class="fas fa-check"></i> Timeline</div>
+      <div class="hero-feat"><i class="fas fa-check"></i> AI Summary</div>
     </div>
   </div>
 </div>
 
-<!-- UPLOAD SECTION -->
-<div class="container">
+<!-- ══════════ UPLOAD ══════════ -->
+<div class="page-wrap">
   <div class="upload-area" id="uploadArea">
+
+    <!-- Drop zone -->
     <div class="upload-zone" id="uploadZone">
-      <input type="file" id="evidenceFile" accept=".e01,.dd,.raw,.img,.iso,.dd,.vmdk,.pdf,.docx,.txt,.jpg,.png,.zip"/>
+      <input type="file" id="evidenceFile"
+             accept=".e01,.dd,.raw,.img,.iso,.vmdk,.pdf,.docx,.txt,.jpg,.png,.zip"/>
       <div class="upload-icon"><i class="fas fa-cloud-upload-alt"></i></div>
       <h3>Drop Evidence File Here</h3>
-      <p>or click to browse — supports disk images and logical files</p>
-      <div class="supported-types" style="margin-top: 12px;">
+      <p>or tap to browse — supports disk images &amp; logical files</p>
+      <div class="supported-types">
         <span class="type-badge">E01</span>
         <span class="type-badge">DD/RAW</span>
         <span class="type-badge">IMG</span>
@@ -313,29 +673,35 @@
         <span class="type-badge">ANY FILE</span>
       </div>
     </div>
-    
+
+    <!-- Selected file strip -->
     <div class="file-selected" id="fileSelected">
       <i class="fas fa-file-alt"></i>
       <div class="file-info">
-        <h4 id="selectedFileName">file.dd</h4>
-        <p id="selectedFileSize">0 MB</p>
+        <h4 id="selectedFileName">evidence.dd</h4>
+        <p id="selectedFileSize">— bytes</p>
       </div>
-      <button class="file-remove" onclick="clearFile()"><i class="fas fa-times"></i></button>
+      <button class="file-remove" onclick="clearFile()" aria-label="Remove file">
+        <i class="fas fa-times"></i>
+      </button>
     </div>
 
+    <!-- Options -->
     <div class="form-options">
       <div class="form-group">
-        <label><i class="fas fa-key"></i> Search Keywords (comma-separated)</label>
-        <input type="text" class="form-control" id="keywords" 
+        <label><i class="fas fa-key"></i> Search Keywords <small>(comma-separated)</small></label>
+        <input type="text" class="form-control" id="keywords"
                value="password,login,bitcoin,admin,secret,gmail,exe,pdf"
-               placeholder="password, bitcoin, gmail, .exe"/>
+               placeholder="password, bitcoin, gmail, .exe"
+               autocomplete="off" autocorrect="off" spellcheck="false"/>
       </div>
       <div class="form-group">
-        <label><i class="fas fa-robot"></i> OpenAI API Key (optional — for AI summary)</label>
+        <label><i class="fas fa-robot"></i> OpenAI API Key <small>(optional — for AI summary)</small></label>
         <div class="openai-row">
           <input type="password" class="form-control" id="openaiKey"
-                 placeholder="sk-... (leave blank to use template summary)"/>
-          <button class="btn btn-outline" onclick="toggleKeyVisibility()">
+                 placeholder="sk-... leave blank for template summary"
+                 autocomplete="new-password"/>
+          <button class="btn btn-outline" onclick="toggleKeyVisibility()" title="Toggle visibility">
             <i class="fas fa-eye" id="eyeIcon"></i>
           </button>
         </div>
@@ -348,14 +714,14 @@
     </button>
   </div>
 
-  <!-- PROGRESS -->
+  <!-- ══════════ PROGRESS ══════════ -->
   <div class="progress-section" id="progressSection">
     <div class="progress-card">
       <div class="progress-header">
         <div class="progress-spinner" id="progressSpinner"></div>
-        <div>
-          <div class="progress-title" id="progressTitle">Initializing analysis...</div>
-          <div class="progress-sub" id="progressSub">Preparing forensic pipeline</div>
+        <div style="flex:1;min-width:0">
+          <div class="progress-title" id="progressTitle">Initializing analysis…</div>
+          <div class="progress-sub"  id="progressSub">Preparing forensic pipeline</div>
         </div>
       </div>
       <div class="progress-bar-wrap">
@@ -366,106 +732,139 @@
     </div>
   </div>
 
-  <!-- JOBS LIST -->
+  <!-- ══════════ JOBS LIST ══════════ -->
   <div class="jobs-section" id="jobsSection" style="display:none">
-    <div class="jobs-title"><i class="fas fa-list-alt"></i> Investigation Jobs</div>
+    <div class="jobs-title">
+      <i class="fas fa-list-alt"></i> Investigation Jobs
+    </div>
     <div id="jobsList"></div>
   </div>
-</div>
+</div><!-- /page-wrap -->
 
-<!-- FEATURES -->
+<!-- ══════════ FEATURES ══════════ -->
 <div class="features-section">
   <div class="features-title">Comprehensive Forensic Analysis</div>
   <div class="features-sub">Everything you need to investigate digital evidence</div>
   <div class="features-grid">
+
     <div class="feat-card">
       <div class="feat-icon icon-blue"><i class="fas fa-hdd"></i></div>
       <div class="feat-title">Disk Image Analysis</div>
-      <div class="feat-desc">Full Sleuth Kit integration with mmls, fsstat, fls, ils. Automatic partition detection and filesystem parsing.</div>
+      <div class="feat-desc">Full Sleuth Kit integration — mmls, fsstat, fls, ils. Automatic partition detection and filesystem parsing.</div>
       <div class="feat-tags"><span class="feat-tag">mmls</span><span class="feat-tag">fsstat</span><span class="feat-tag">fls</span><span class="feat-tag">ils</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-red"><i class="fas fa-trash-restore"></i></div>
       <div class="feat-title">File Recovery</div>
-      <div class="feat-desc">Recover deleted and unallocated files using tsk_recover. Identifies deleted file artifacts and inode information.</div>
+      <div class="feat-desc">Recover deleted and unallocated files using tsk_recover. Identifies deleted file artifacts and inode info.</div>
       <div class="feat-tags"><span class="feat-tag">tsk_recover</span><span class="feat-tag">deleted</span><span class="feat-tag">carving</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-green"><i class="fas fa-globe"></i></div>
       <div class="feat-title">Browser Artifacts</div>
       <div class="feat-desc">Parse Chrome History and Firefox places.sqlite. Extract visited URLs, page titles, and visit timestamps.</div>
       <div class="feat-tags"><span class="feat-tag">Chrome</span><span class="feat-tag">Firefox</span><span class="feat-tag">SQLite</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-orange"><i class="fas fa-camera"></i></div>
       <div class="feat-title">EXIF Metadata</div>
-      <div class="feat-desc">Extract GPS coordinates, camera serial numbers, timestamps, and software info from images using exiftool.</div>
+      <div class="feat-desc">Extract GPS coordinates, camera serial numbers, timestamps, and software info from images via exiftool.</div>
       <div class="feat-tags"><span class="feat-tag">exiftool</span><span class="feat-tag">GPS</span><span class="feat-tag">camera</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-purple"><i class="fas fa-robot"></i></div>
       <div class="feat-title">AI Summarization</div>
-      <div class="feat-desc">GPT-powered evidence summary highlighting key findings, suspicious activity, and actionable investigation recommendations.</div>
+      <div class="feat-desc">GPT-powered evidence summary highlighting key findings, suspicious activity, and actionable recommendations.</div>
       <div class="feat-tags"><span class="feat-tag">OpenAI</span><span class="feat-tag">GPT</span><span class="feat-tag">summary</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-teal"><i class="fas fa-history"></i></div>
       <div class="feat-title">Forensic Timeline</div>
-      <div class="feat-desc">Build MAC-time activity timelines using fls and mactime. Sort and filter by modification, access, and creation times.</div>
+      <div class="feat-desc">Build MAC-time activity timelines using fls and mactime. Sort by modification, access, and creation times.</div>
       <div class="feat-tags"><span class="feat-tag">mactime</span><span class="feat-tag">MAC-time</span><span class="feat-tag">timeline</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-blue"><i class="fas fa-search"></i></div>
       <div class="feat-title">Keyword Search</div>
-      <div class="feat-desc">Deep search across file names, content, browser history, metadata, and SQLite databases for any keyword or pattern.</div>
+      <div class="feat-desc">Deep search across file names, content, browser history, metadata, and SQLite databases for any keyword.</div>
       <div class="feat-tags"><span class="feat-tag">.exe</span><span class="feat-tag">@gmail</span><span class="feat-tag">bitcoin</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-green"><i class="fas fa-file-pdf"></i></div>
       <div class="feat-title">Interactive Report</div>
-      <div class="feat-desc">Beautiful HTML report with image viewer, video player, document preview, and live keyword search filter.</div>
+      <div class="feat-desc">Beautiful HTML report with image viewer, video player, document preview, and live keyword search.</div>
       <div class="feat-tags"><span class="feat-tag">HTML</span><span class="feat-tag">preview</span><span class="feat-tag">filter</span></div>
     </div>
+
     <div class="feat-card">
       <div class="feat-icon icon-red"><i class="fas fa-fingerprint"></i></div>
       <div class="feat-title">Evidence Hashing</div>
-      <div class="feat-desc">Compute MD5, SHA-1, and SHA-256 hashes for evidence integrity verification and chain of custody documentation.</div>
+      <div class="feat-desc">Compute MD5, SHA-1, and SHA-256 hashes for evidence integrity verification and chain of custody.</div>
       <div class="feat-tags"><span class="feat-tag">MD5</span><span class="feat-tag">SHA-256</span><span class="feat-tag">integrity</span></div>
     </div>
+
   </div>
 </div>
 
-<!-- FOOTER -->
+<!-- ══════════ FOOTER ══════════ -->
 <footer>
-  <div style="margin-bottom: 8px; font-size: 16px; font-weight: 700; color: var(--text);">
-    <i class="fas fa-shield-alt" style="color: var(--primary)"></i> Digital Forensics Investigation Platform
+  <div class="footer-brand">
+    <i class="fas fa-shield-alt" style="color:var(--primary)"></i>
+    Digital Forensics Investigation Platform
   </div>
   Built with FastAPI · Sleuth Kit · OpenAI · Professional Grade Forensics
 </footer>
 
 <!-- TOAST -->
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="alert" aria-live="polite"></div>
+
+<!-- ══════════ BOTTOM NAV (mobile only) ══════════ -->
+<nav class="bottom-nav" aria-label="Mobile navigation">
+  <div class="bottom-nav-inner">
+    <button class="bnav-item" onclick="scrollToUpload()" aria-label="Upload">
+      <i class="fas fa-cloud-upload-alt"></i>
+      <span>Upload</span>
+    </button>
+    <button class="bnav-item bnav-analyze" onclick="scrollToUpload()" aria-label="Analyze">
+      <i class="fas fa-search"></i>
+      <span>Analyze</span>
+    </button>
+    <button class="bnav-item" onclick="scrollToJobs()" aria-label="Jobs">
+      <i class="fas fa-list-alt"></i>
+      <span>Jobs</span>
+    </button>
+    <button class="bnav-item" onclick="checkHealth()" aria-label="Status">
+      <i class="fas fa-heartbeat"></i>
+      <span>Status</span>
+    </button>
+  </div>
+</nav>
 
 <script>
+  'use strict';
+
   let currentJobId = null;
   let pollInterval = null;
-  let selectedFile = null;
+  let selectedFile  = null;
 
-  // ─────────────────────────────────────────
-  // File Selection
-  // ─────────────────────────────────────────
-  const fileInput = document.getElementById('evidenceFile');
+  /* ─── File Selection ─── */
+  const fileInput  = document.getElementById('evidenceFile');
   const uploadZone = document.getElementById('uploadZone');
-  
-  fileInput.addEventListener('change', function() {
+
+  fileInput.addEventListener('change', function () {
     if (this.files.length > 0) selectFile(this.files[0]);
   });
 
-  uploadZone.addEventListener('dragover', e => {
-    e.preventDefault();
-    uploadZone.classList.add('drag-over');
-  });
-  uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+  /* Drag-and-drop (desktop) */
+  uploadZone.addEventListener('dragover',  e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+  uploadZone.addEventListener('dragleave', ()=> uploadZone.classList.remove('drag-over'));
   uploadZone.addEventListener('drop', e => {
     e.preventDefault();
     uploadZone.classList.remove('drag-over');
@@ -475,7 +874,7 @@
   function selectFile(file) {
     selectedFile = file;
     document.getElementById('selectedFileName').textContent = file.name;
-    document.getElementById('selectedFileSize').textContent = formatSize(file.size);
+    document.getElementById('selectedFileSize').textContent = fmtSize(file.size);
     document.getElementById('fileSelected').classList.add('show');
     document.getElementById('analyzeBtn').disabled = false;
   }
@@ -487,123 +886,96 @@
     document.getElementById('analyzeBtn').disabled = true;
   }
 
-  function formatSize(bytes) {
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let size = bytes;
-    for (const unit of units) {
-      if (size < 1024) return size.toFixed(1) + ' ' + unit;
-      size /= 1024;
+  function fmtSize(b) {
+    const u = ['B','KB','MB','GB'];
+    let s = b;
+    for (const unit of u) {
+      if (s < 1024) return s.toFixed(1) + ' ' + unit;
+      s /= 1024;
     }
-    return size.toFixed(1) + ' TB';
+    return s.toFixed(1) + ' TB';
   }
 
   function toggleKeyVisibility() {
-    const input = document.getElementById('openaiKey');
+    const inp  = document.getElementById('openaiKey');
     const icon = document.getElementById('eyeIcon');
-    if (input.type === 'password') {
-      input.type = 'text';
-      icon.className = 'fas fa-eye-slash';
-    } else {
-      input.type = 'password';
-      icon.className = 'fas fa-eye';
-    }
+    const hide = inp.type === 'password';
+    inp.type       = hide ? 'text'          : 'password';
+    icon.className = hide ? 'fas fa-eye-slash' : 'fas fa-eye';
   }
 
-  // ─────────────────────────────────────────
-  // Start Analysis
-  // ─────────────────────────────────────────
+  /* ─── Start Analysis ─── */
   async function startAnalysis() {
-    if (!selectedFile) {
-      showToast('Please select an evidence file first', 'error');
-      return;
-    }
+    if (!selectedFile) { showToast('Please select an evidence file first', 'error'); return; }
 
-    const keywords = document.getElementById('keywords').value || 'password,bitcoin,gmail';
+    const keywords  = document.getElementById('keywords').value || 'password,bitcoin,gmail';
     const openaiKey = document.getElementById('openaiKey').value.trim();
 
-    // Set OpenAI key as environment variable via API (if provided)
     if (openaiKey) {
       await fetch('/api/config/openai', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({key: openaiKey})
-      }).catch(() => {});
+      }).catch(()=>{});
     }
 
-    const formData = new FormData();
-    formData.append('evidence', selectedFile);
-    formData.append('keywords', keywords);
+    const fd = new FormData();
+    fd.append('evidence', selectedFile);
+    fd.append('keywords', keywords);
 
     document.getElementById('analyzeBtn').disabled = true;
     document.getElementById('progressSection').classList.add('show');
-    document.getElementById('progressTitle').textContent = 'Uploading evidence...';
-    updateProgress(5);
+    document.getElementById('progressTitle').textContent = 'Uploading evidence…';
+    updateProgress(3);
+
+    // scroll to progress on mobile
+    document.getElementById('progressSection').scrollIntoView({behavior:'smooth', block:'start'});
 
     try {
-      const response = await fetch('/api/investigate', {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
-      const data = await response.json();
+      const res  = await fetch('/api/investigate', { method:'POST', body: fd });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+      const data = await res.json();
       currentJobId = data.job_id;
-
-      showToast('Analysis started! Job ID: ' + currentJobId, 'success');
+      showToast('Analysis started — Job: ' + currentJobId, 'success');
       startPolling(currentJobId);
       loadJobs();
-
     } catch (err) {
-      showToast('Failed to start analysis: ' + err.message, 'error');
+      showToast('Upload failed: ' + err.message, 'error');
       document.getElementById('analyzeBtn').disabled = false;
       document.getElementById('progressSection').classList.remove('show');
     }
   }
 
-  // ─────────────────────────────────────────
-  // Polling
-  // ─────────────────────────────────────────
+  /* ─── Polling ─── */
   function startPolling(jobId) {
     clearInterval(pollInterval);
-    pollInterval = setInterval(() => pollStatus(jobId), 2000);
+    pollInterval = setInterval(() => pollStatus(jobId), 2200);
   }
 
   async function pollStatus(jobId) {
     try {
-      const resp = await fetch(`/api/status/${jobId}`);
-      const data = await resp.json();
-
+      const data = await fetch('/api/status/' + jobId).then(r => r.json());
       updateProgress(data.progress || 0);
-      
-      const stepMessages = {
-        5: 'Detecting evidence type...',
-        10: 'Computing hashes (MD5, SHA256)...',
-        15: 'Running disk analysis with Sleuth Kit...',
-        30: 'Recovering files with tsk_recover...',
-        45: 'Extracting artifacts...',
-        60: 'Building forensic timeline...',
-        70: 'Running keyword searches...',
-        80: 'Generating AI summary...',
-        88: 'Creating interactive report...',
-        100: 'Analysis complete!'
-      };
-      
-      const nearest = Object.keys(stepMessages).reduce((prev, curr) => {
-        return Math.abs(curr - data.progress) < Math.abs(prev - data.progress) ? curr : prev;
-      });
-      
-      document.getElementById('progressTitle').textContent = 
-        stepMessages[nearest] || `Analyzing... ${data.progress}%`;
-      document.getElementById('progressSub').textContent = 
-        `Evidence: ${data.evidence_name || ''}  |  Type: ${data.evidence_type || 'detecting'}  |  Recovered: ${data.recovered_count || 0} files`;
 
-      // Update log
-      if (data.log && data.log.length > 0) {
+      const steps = {
+        5:'Detecting evidence type…', 10:'Computing hashes (MD5, SHA256)…',
+        15:'Running Sleuth Kit disk analysis…', 30:'Recovering files with tsk_recover…',
+        45:'Extracting artifacts…', 60:'Building forensic timeline…',
+        70:'Running keyword searches…', 80:'Generating AI summary…',
+        88:'Creating interactive report…', 100:'Analysis complete!'
+      };
+      const near = Object.keys(steps).reduce((a,b) =>
+        Math.abs(b - data.progress) < Math.abs(a - data.progress) ? b : a);
+
+      document.getElementById('progressTitle').textContent = steps[near] || `Analyzing… ${data.progress}%`;
+      document.getElementById('progressSub').textContent =
+        `${data.evidence_name || ''}  ·  ${data.evidence_type || 'detecting'}  ·  ${data.recovered_count || 0} files recovered`;
+
+      if (data.log && data.log.length) {
         const logDiv = document.getElementById('progressLog');
-        logDiv.innerHTML = data.log.map(line => {
-          const cls = line.includes('✅') ? 'success' : line.includes('❌') ? 'error' : '';
-          return `<div class="log-line ${cls}">${escapeHtml(line)}</div>`;
+        logDiv.innerHTML = data.log.map(l => {
+          const c = l.includes('✅') ? 'success' : l.includes('❌') ? 'error' : '';
+          return `<div class="log-line ${c}">${esc(l)}</div>`;
         }).join('');
         logDiv.scrollTop = logDiv.scrollHeight;
       }
@@ -612,158 +984,112 @@
         clearInterval(pollInterval);
         updateProgress(100);
         document.getElementById('progressSpinner').style.display = 'none';
-        showToast('Analysis complete! Opening report...', 'success');
-        
+        showToast('✅ Analysis complete! Opening report…', 'success');
         setTimeout(() => {
-          if (data.report_url) {
-            window.open(data.report_url, '_blank');
-          }
+          if (data.report_url) window.open(data.report_url, '_blank');
           loadJobs();
-        }, 1500);
+        }, 1600);
       }
-
       if (data.status === 'failed') {
         clearInterval(pollInterval);
         document.getElementById('progressTitle').textContent = '❌ Analysis Failed';
-        document.getElementById('progressSub').textContent = data.error || 'Unknown error';
+        document.getElementById('progressSub').textContent   = data.error || 'Unknown error';
         document.getElementById('progressSpinner').style.display = 'none';
         document.getElementById('analyzeBtn').disabled = false;
-        showToast('Analysis failed: ' + (data.error || 'Unknown error'), 'error');
+        showToast('Analysis failed: ' + (data.error || 'Error'), 'error');
         loadJobs();
       }
-
-    } catch (err) {
-      console.error('Polling error:', err);
-    }
+    } catch (e) { console.warn('Poll error', e); }
   }
 
   function updateProgress(pct) {
     document.getElementById('progressBar').style.width = pct + '%';
-    document.getElementById('progressPct').textContent = pct + '%';
+    document.getElementById('progressPct').textContent  = pct + '%';
   }
 
-  // ─────────────────────────────────────────
-  // Jobs List
-  // ─────────────────────────────────────────
+  /* ─── Jobs List ─── */
   async function loadJobs() {
     try {
-      const resp = await fetch('/api/jobs');
-      const data = await resp.json();
-      
-      const jobsSection = document.getElementById('jobsSection');
-      const jobsList = document.getElementById('jobsList');
-      
-      if (!data.jobs || data.jobs.length === 0) {
-        jobsSection.style.display = 'none';
-        return;
-      }
-      
-      jobsSection.style.display = 'block';
-      
-      jobsList.innerHTML = data.jobs.map(job => {
-        const statusClass = job.status === 'completed' ? 'completed' : 
-                            job.status === 'failed' ? 'failed' : 'running';
-        const dotClass = `status-${job.status}`;
-        const typeIcon = getTypeIcon(job.evidence_type);
-        const date = job.created_at ? new Date(job.created_at).toLocaleString() : '';
-        
+      const data = await fetch('/api/jobs').then(r => r.json());
+      const sec  = document.getElementById('jobsSection');
+      const list = document.getElementById('jobsList');
+      if (!data.jobs || !data.jobs.length) { sec.style.display='none'; return; }
+      sec.style.display = 'block';
+      list.innerHTML = data.jobs.map(job => {
+        const sc = job.status === 'completed' ? 'completed' : job.status === 'failed' ? 'failed' : 'running';
+        const dc = `status-${job.status}`;
+        const ic = {disk_image:'fas fa-hdd',e01:'fas fa-hdd',iso:'fas fa-compact-disc',logical_file:'fas fa-file'}[job.evidence_type] || 'fas fa-file-alt';
+        const dt = job.created_at ? new Date(job.created_at).toLocaleString() : '';
         return `
-          <div class="job-card">
-            <div class="job-icon ${statusClass}">
-              <i class="${typeIcon}"></i>
+        <div class="job-card">
+          <div class="job-icon ${sc}"><i class="${ic}"></i></div>
+          <div class="job-details">
+            <div class="job-name">${esc(job.evidence_name||'Unknown')}</div>
+            <div class="job-meta">
+              <span><span class="status-dot ${dc}"></span> ${job.status}</span>
+              <span><i class="fas fa-hashtag"></i> ${job.job_id}</span>
+              <span><i class="fas fa-tag"></i> ${job.evidence_type||'unknown'}</span>
+              ${dt ? `<span><i class="fas fa-clock"></i> ${dt}</span>` : ''}
             </div>
-            <div class="job-details">
-              <div class="job-name">${escapeHtml(job.evidence_name || 'Unknown')}</div>
-              <div class="job-meta">
-                <span><span class="status-dot ${dotClass}"></span> ${job.status}</span>
-                <span><i class="fas fa-hashtag"></i> ${job.job_id}</span>
-                <span><i class="fas fa-tag"></i> ${job.evidence_type || 'unknown'}</span>
-                ${date ? `<span><i class="fas fa-clock"></i> ${date}</span>` : ''}
-              </div>
-            </div>
-            <div class="job-actions">
-              ${job.report_url ? `<button class="btn btn-sm btn-report" onclick="openReport('${job.report_url}')">
-                <i class="fas fa-file-alt"></i> Report
-              </button>` : ''}
-              <button class="btn btn-sm btn-delete" onclick="deleteJob('${job.job_id}')">
-                <i class="fas fa-trash"></i>
-              </button>
-            </div>
-          </div>`;
+          </div>
+          <div class="job-actions">
+            ${job.report_url ? `<button class="btn btn-sm btn-report" onclick="window.open('${job.report_url}','_blank')">
+              <i class="fas fa-file-alt"></i> <span class="btn-label">Report</span>
+            </button>` : ''}
+            <button class="btn btn-sm btn-delete" onclick="delJob('${job.job_id}')">
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </div>`;
       }).join('');
-      
-    } catch (err) {
-      console.error('Load jobs error:', err);
-    }
+    } catch (e) { console.warn('Jobs error', e); }
   }
 
-  function openReport(url) {
-    window.open(url, '_blank');
-  }
-
-  async function deleteJob(jobId) {
-    if (!confirm('Delete this investigation job?')) return;
+  async function delJob(id) {
+    if (!confirm('Delete this investigation job and its files?')) return;
     try {
-      await fetch(`/api/jobs/${jobId}`, {method: 'DELETE'});
+      await fetch('/api/jobs/'+id, {method:'DELETE'});
       loadJobs();
       showToast('Job deleted', 'success');
-    } catch (err) {
-      showToast('Delete failed', 'error');
-    }
+    } catch(e){ showToast('Delete failed','error'); }
   }
 
-  function getTypeIcon(type) {
-    const icons = {
-      'disk_image': 'fas fa-hdd',
-      'e01': 'fas fa-hdd',
-      'iso': 'fas fa-compact-disc',
-      'logical_file': 'fas fa-file',
-    };
-    return icons[type] || 'fas fa-file-alt';
-  }
-
-  // ─────────────────────────────────────────
-  // Health Check
-  // ─────────────────────────────────────────
+  /* ─── Health ─── */
   async function checkHealth() {
     try {
-      const resp = await fetch('/api/health');
-      const data = await resp.json();
-      
-      const toolsStatus = Object.entries(data.tools || {})
-        .map(([t, ok]) => `${ok ? '✅' : '❌'} ${t}`)
-        .join('  |  ');
-      
-      const tskOk = data.tools?.mmls || data.tools?.fls;
-      if (!tskOk) {
-        document.getElementById('toolStatus').style.display = 'inline-flex';
-      } else {
-        document.getElementById('toolStatus').style.display = 'none';
-      }
-      
-      alert(`System Status: ${data.status}\n\nForensic Tools:\n${toolsStatus.replace(/ \| /g, '\n')}`);
-    } catch(e) {
-      showToast('Health check failed', 'error');
+      const d = await fetch('/api/health').then(r => r.json());
+      const tools = Object.entries(d.tools||{}).map(([t,ok])=>`${ok?'✅':'❌'} ${t}`).join('\n');
+      const tskOk = d.tools?.mmls || d.tools?.fls;
+      document.getElementById('toolStatus').style.display = tskOk ? 'none' : 'inline-flex';
+      alert(`System: ${d.status}\n\nForensic Tools:\n${tools}`);
+    } catch(e){ showToast('Health check failed','error'); }
+  }
+
+  /* ─── Toast ─── */
+  function showToast(msg, type='') {
+    const t = document.getElementById('toast');
+    const ic = type==='success'?'fa-check-circle':type==='error'?'fa-times-circle':'fa-info-circle';
+    t.className = `toast ${type} show`;
+    t.innerHTML = `<i class="fas ${ic}"></i> ${msg}`;
+    setTimeout(()=> t.className='toast', 4200);
+  }
+
+  function esc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  /* ─── Mobile helpers ─── */
+  function scrollToUpload() {
+    document.getElementById('uploadArea').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function scrollToJobs() {
+    const sec = document.getElementById('jobsSection');
+    if (sec && sec.style.display !== 'none') {
+      sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      showToast('No investigation jobs yet', '');
     }
   }
 
-  // ─────────────────────────────────────────
-  // Utilities
-  // ─────────────────────────────────────────
-  function showToast(message, type = '') {
-    const toast = document.getElementById('toast');
-    toast.className = `toast ${type} show`;
-    toast.innerHTML = `<i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-times-circle' : 'fa-info-circle'}"></i> ${message}`;
-    setTimeout(() => toast.className = 'toast', 4000);
-  }
-
-  function escapeHtml(str) {
-    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  // ─────────────────────────────────────────
-  // Init
-  // ─────────────────────────────────────────
+  /* ─── Init ─── */
   loadJobs();
 </script>
 </body>

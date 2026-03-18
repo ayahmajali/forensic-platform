@@ -144,6 +144,14 @@ class ReportGenerator:
 </style>
 </head>
 <body>
+<!-- MOBILE HAMBURGER BUTTON -->
+<button class="mob-menu-btn" id="mobMenuBtn" onclick="toggleSidebar()" aria-label="Open navigation menu">
+  <i class="fas fa-bars" id="mobMenuIcon"></i>
+</button>
+
+<!-- SIDEBAR OVERLAY -->
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
+
 <!-- TOP NAV -->
 <nav class="topnav">
   <div class="nav-brand">
@@ -975,9 +983,151 @@ class ReportGenerator:
         ::-webkit-scrollbar-track { background: #f1f5f9; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 
+        /* ─── MOBILE HAMBURGER BUTTON ─── */
+        .mob-menu-btn {
+          display: none;
+          position: fixed; top: 12px; left: 16px; z-index: 1100;
+          background: var(--primary); color: #fff;
+          border: none; border-radius: 8px;
+          width: 40px; height: 40px;
+          font-size: 16px; cursor: pointer;
+          align-items: center; justify-content: center;
+          box-shadow: 0 2px 8px rgba(37,99,235,.35);
+          transition: background .15s;
+        }
+        .mob-menu-btn:hover { background: var(--primary-dark); }
+
+        /* ─── SIDEBAR OVERLAY (mobile) ─── */
+        .sidebar-overlay {
+          display: none;
+          position: fixed; inset: 0; z-index: 1050;
+          background: rgba(0,0,0,.45);
+          backdrop-filter: blur(2px);
+          -webkit-backdrop-filter: blur(2px);
+        }
+        .sidebar-overlay.open { display: block; }
+
+        /* ─── STATS ROW → 2 columns on small screens ─── */
+        @media (max-width: 600px) {
+          .stats-row { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+          .stat-num  { font-size: 22px; }
+          .stat-icon { font-size: 18px; margin-bottom: 4px; }
+          .stat-card { padding: 12px 10px; }
+        }
+
+        /* ─── TABLET ≤ 900px ─── */
         @media (max-width: 900px) {
-          .sidebar { display: none; }
-          .main-content { margin-left: 0; }
+          /* Sidebar becomes off-canvas drawer */
+          .sidebar {
+            transform: translateX(-100%);
+            transition: transform .28s ease;
+            z-index: 1060;
+            top: 0; height: 100%;
+            box-shadow: var(--shadow-md);
+          }
+          .sidebar.open { transform: translateX(0); }
+
+          /* Push hamburger into view */
+          .mob-menu-btn { display: flex; }
+
+          /* Main content fills full width */
+          .main-content { margin-left: 0; padding: 16px 12px; }
+
+          /* Top nav: hide date text on narrow screens */
+          .nav-date { display: none; }
+          /* Give topnav left padding so brand doesn't overlap hamburger */
+          .topnav { padding-left: 68px; }
+          .nav-brand span { font-size: 15px; }
+
+          /* Card header: allow items to wrap gracefully */
+          .card-header { flex-wrap: wrap; gap: 8px; padding: 12px 14px; }
+          .table-filter { width: 100%; margin-left: 0; margin-top: 4px; }
+
+          /* Tables: horizontal scroll on small viewports */
+          .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+          .data-table { min-width: 540px; }
+
+          /* Hash grid: stack vertically */
+          .hash-item { flex-direction: column; align-items: flex-start; gap: 4px; }
+          .hash-value { font-size: 11px; word-break: break-all; }
+
+          /* Info grid: 2 cols max */
+          .info-grid { grid-template-columns: repeat(2, 1fr); }
+
+          /* Media grid: smaller tiles */
+          .media-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+          .media-thumb { height: 90px; }
+
+          /* Lightbox: full-screen on mobile */
+          .lightbox-inner { max-width: 98vw; max-height: 95vh; padding: 16px 14px; border-radius: 8px; }
+          #lightbox-content img,
+          #lightbox-content video { max-height: 65vh; }
+
+          /* Search results: compact */
+          .hit-meta { gap: 6px; }
+          .hit-context { font-size: 11px; }
+        }
+
+        /* ─── PHONE ≤ 600px ─── */
+        @media (max-width: 600px) {
+          /* Tighter card body */
+          .card-body { padding: 14px 12px; }
+          .card-header { font-size: 13px; padding: 10px 12px; }
+
+          /* Stats 2-col already set above */
+
+          /* Info grid: single column */
+          .info-grid { grid-template-columns: 1fr; }
+
+          /* AI summary font */
+          .ai-summary-body { font-size: 13px; line-height: 1.65; }
+
+          /* Top nav brand: compact */
+          .nav-brand span { display: none; }
+          .nav-brand i { font-size: 20px; }
+          .nav-info .badge { display: none; }
+          .nav-info .badge:first-child { display: inline-flex; }
+
+          /* Search bar */
+          .search-wrap input { font-size: 13px; padding: 11px 0; }
+          .btn-search { padding: 6px 12px; font-size: 12px; }
+
+          /* Tables: smaller font */
+          .data-table { font-size: 12px; min-width: 420px; }
+          .data-table th,
+          .data-table td { padding: 7px 9px; }
+
+          /* Filename + url cells */
+          .filename-cell { max-width: 160px; }
+          .url-cell      { max-width: 180px; }
+
+          /* Media grid: 2 tiles per row */
+          .media-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+          .media-thumb { height: 80px; }
+          .media-name  { font-size: 11px; }
+
+          /* Search hits: single column */
+          .search-keyword-group { margin-bottom: 12px; }
+          .search-kw-header { padding: 10px 12px; font-size: 13px; flex-wrap: wrap; }
+          .kw-text { font-size: 12px; }
+          .search-hits { padding: 10px; gap: 6px; }
+          .search-hit { padding: 8px 10px; }
+          .hit-context { font-size: 11px; padding: 5px 8px; }
+
+          /* Timeline badges */
+          .badge { font-size: 10px; padding: 2px 7px; }
+
+          /* Report footer */
+          .report-footer { font-size: 11px; padding: 16px 12px; }
+        }
+
+        /* ─── EXTRA SMALL ≤ 380px ─── */
+        @media (max-width: 380px) {
+          .stats-row { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+          .stat-num  { font-size: 20px; }
+          .media-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+          .data-table { min-width: 360px; }
+          .card-header { font-size: 12px; }
         }
         """
 
@@ -989,13 +1139,31 @@ class ReportGenerator:
         })
         
         return f"""
-        // Sidebar scroll
+        // ── Sidebar mobile toggle ──
+        function toggleSidebar() {{
+          const sidebar  = document.getElementById('sidebar');
+          const overlay  = document.getElementById('sidebarOverlay');
+          const icon     = document.getElementById('mobMenuIcon');
+          const isOpen   = sidebar.classList.toggle('open');
+          overlay.classList.toggle('open', isOpen);
+          icon.className = isOpen ? 'fas fa-times' : 'fas fa-bars';
+          document.body.style.overflow = isOpen ? 'hidden' : '';
+        }}
+        function closeSidebar() {{
+          document.getElementById('sidebar').classList.remove('open');
+          document.getElementById('sidebarOverlay').classList.remove('open');
+          document.getElementById('mobMenuIcon').className = 'fas fa-bars';
+          document.body.style.overflow = '';
+        }}
+
+        // ── Sidebar scroll (closes on mobile after click) ──
         function scrollTo(id) {{
           const el = document.getElementById(id);
           if (el) el.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-          // Update active sidebar
           document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
           event.currentTarget.classList.add('active');
+          // Close drawer on mobile after navigation
+          if (window.innerWidth <= 900) closeSidebar();
         }}
         
         // Table filter
