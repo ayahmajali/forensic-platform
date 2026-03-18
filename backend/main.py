@@ -46,9 +46,9 @@ BASE_DIR = Path(__file__).parent.resolve()
 STATIC_DIR  = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-# On Vercel (and any read-only filesystem) we must write to /tmp
-# On local dev we write next to main.py as before
+# On Vercel (read-only filesystem) we use /tmp; everywhere else write next to main.py
 IS_VERCEL = os.getenv("VERCEL", "") == "1" or os.getenv("VERCEL_ENV", "") != ""
+IS_RENDER = os.getenv("RENDER", "") != ""
 
 if IS_VERCEL:
     _WRITABLE = Path(tempfile.gettempdir()) / "forensic"
@@ -82,19 +82,21 @@ try:
 except Exception as e:
     print(f"[WARN] Could not mount /static: {e}")
 
-# Mount writable dirs — ONLY on local dev (Vercel uses /api/report-file/ instead)
-# StaticFiles crashes on empty dirs, so we skip mounting on Vercel entirely
-if not IS_VERCEL:
+# Mount reports and recovered — always available on local/Render
+# Skip empty-dir check; just wrap in try/except so cold start never crashes
+for _mount_path, _mount_dir, _mount_name in [
+    ("/reports",   REPORTS_DIR,   "reports"),
+    ("/recovered", RECOVERED_DIR, "recovered"),
+]:
     try:
-        if REPORTS_DIR.exists() and any(REPORTS_DIR.iterdir()):
-            app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+        _mount_dir.mkdir(parents=True, exist_ok=True)
+        # Create a .keep file so StaticFiles doesn't crash on empty dir
+        _keep = _mount_dir / ".keep"
+        if not _keep.exists():
+            _keep.write_text("")
+        app.mount(_mount_path, StaticFiles(directory=str(_mount_dir)), name=_mount_name)
     except Exception as e:
-        print(f"[WARN] Could not mount /reports: {e}")
-    try:
-        if RECOVERED_DIR.exists() and any(RECOVERED_DIR.iterdir()):
-            app.mount("/recovered", StaticFiles(directory=str(RECOVERED_DIR)), name="recovered")
-    except Exception as e:
-        print(f"[WARN] Could not mount /recovered: {e}")
+        print(f"[WARN] Could not mount {_mount_path}: {e}")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -484,13 +486,7 @@ async def health():
     return JSONResponse({"status": "healthy", "tools": tools, "timestamp": datetime.now().isoformat()})
 
 
-# ── Vercel ASGI handler (Mangum wraps FastAPI for AWS Lambda / Vercel) ──
-try:
-    from mangum import Mangum
-    handler = Mangum(app, lifespan="off")
-except ImportError:
-    handler = None  # Not on Vercel
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
