@@ -1,13 +1,16 @@
 """
 Digital Forensics Investigation Platform
 Main FastAPI Application Entry Point
+Works on: local dev, PM2, AND Vercel serverless
 """
 
 import os
+import sys
 import uuid
 import json
 import asyncio
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -20,6 +23,11 @@ from fastapi.requests import Request
 from fastapi.middleware.cors import CORSMiddleware
 import aiofiles
 
+# ── Ensure backend dir is always on the path (needed when called from api/index.py) ──
+_THIS_DIR = Path(__file__).parent.resolve()
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
 # Import modules
 from modules.analyzer import ForensicAnalyzer
 from modules.disk_analysis import DiskAnalyzer
@@ -30,14 +38,26 @@ from modules.report_generator import ReportGenerator
 from modules.ai_summary import AISummarizer
 
 # ─────────────────────────────────────────
-# App Configuration
+# Path Configuration
+# Works for local server AND Vercel serverless
+# Vercel uses /tmp for writable storage (read-only filesystem otherwise)
 # ─────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-REPORTS_DIR = BASE_DIR / "reports"
-RECOVERED_DIR = BASE_DIR / "recovered"
-STATIC_DIR = BASE_DIR / "static"
+BASE_DIR = Path(__file__).parent.resolve()
+STATIC_DIR  = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
+
+# On Vercel (and any read-only filesystem) we must write to /tmp
+# On local dev we write next to main.py as before
+IS_VERCEL = os.getenv("VERCEL", "") == "1" or os.getenv("VERCEL_ENV", "") != ""
+
+if IS_VERCEL:
+    _WRITABLE = Path(tempfile.gettempdir()) / "forensic"
+else:
+    _WRITABLE = BASE_DIR
+
+UPLOAD_DIR    = _WRITABLE / "uploads"
+REPORTS_DIR   = _WRITABLE / "reports"
+RECOVERED_DIR = _WRITABLE / "recovered"
 
 for d in [UPLOAD_DIR, REPORTS_DIR, RECOVERED_DIR]:
     d.mkdir(parents=True, exist_ok=True)
@@ -56,9 +76,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files (always available — they're in the repo)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
-app.mount("/recovered", StaticFiles(directory=str(RECOVERED_DIR)), name="recovered")
+
+# Mount writable dirs only if they exist and have content
+# (on Vercel these are /tmp dirs, served differently)
+if REPORTS_DIR.exists():
+    app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+if RECOVERED_DIR.exists():
+    app.mount("/recovered", StaticFiles(directory=str(RECOVERED_DIR)), name="recovered")
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -190,7 +216,8 @@ async def run_full_analysis(job_id: str, evidence_path: Path, evidence_name: str
         )
         report_path = report_gen.generate()
         job["report_path"] = str(report_path)
-        job["report_url"] = f"/reports/{job_id}/report.html"
+        # Use /api/report-file/ route — works on both local and Vercel
+        job["report_url"] = f"/api/report-file/{job_id}"
         job["progress"] = 100
         job["status"] = "completed"
         job["completed_at"] = datetime.now().isoformat()
@@ -403,6 +430,28 @@ async def delete_job(job_id: str):
     
     del investigation_jobs[job_id]
     return JSONResponse({"message": "Job deleted successfully"})
+
+
+@app.get("/api/report-file/{job_id}", response_class=HTMLResponse)
+async def serve_report_file(job_id: str):
+    """
+    Serve the HTML report directly via the API.
+    This works on BOTH local dev and Vercel (where /tmp files can't be
+    served as static files by the CDN).
+    """
+    if job_id not in investigation_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = investigation_jobs[job_id]
+    if job["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Report not ready yet")
+
+    report_path = REPORTS_DIR / job_id / "report.html"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report file not found")
+
+    with open(str(report_path), "r", encoding="utf-8") as f:
+        content = f.read()
+    return HTMLResponse(content=content)
 
 
 @app.post("/api/config/openai")

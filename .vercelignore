@@ -1,0 +1,22 @@
+# These folders are generated at runtime — never deploy them
+backend/uploads/
+backend/reports/
+backend/recovered/
+backend/__pycache__/
+backend/modules/__pycache__/
+
+# Dev tools
+.git/
+node_modules/
+*.pyc
+*.pyo
+__pycache__/
+.env
+
+# Large test files
+*.e01
+*.dd
+*.raw
+*.img
+*.iso
+*.vmdk
