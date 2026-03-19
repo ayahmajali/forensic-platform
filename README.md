@@ -85,7 +85,7 @@ sudo apt-get install foremost  # optional carving
 
 ```bash
 # Clone repository
-git clone https://github.com/YOUR_USERNAME/forensic-platform.git
+git clone https://github.com/ayahmajali/forensic-platform.git
 cd forensic-platform/backend
 
 # Create virtual environment
