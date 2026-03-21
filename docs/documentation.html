@@ -5,2052 +5,1650 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Digital Forensics Investigation Platform — Technical Documentation</title>
 <style>
-  /* ── Reset & Base ─────────────────────────────── */
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-  :root {
-    --primary:   #1a3a5c;
-    --accent:    #2563eb;
-    --accent2:   #0ea5e9;
-    --success:   #16a34a;
-    --warning:   #d97706;
-    --danger:    #dc2626;
-    --bg:        #f8fafc;
-    --surface:   #ffffff;
-    --border:    #e2e8f0;
-    --text:      #1e293b;
-    --muted:     #64748b;
-    --code-bg:   #1e293b;
-    --code-text: #e2e8f0;
-  }
-
-  html { scroll-behavior: smooth; }
-
-  body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    font-size: 15px;
-    line-height: 1.75;
-    color: var(--text);
-    background: var(--bg);
-  }
-
-  /* ── Layout ───────────────────────────────────── */
-  .page-wrapper {
-    display: flex;
-    min-height: 100vh;
-  }
-
-  /* ── Sidebar / TOC ────────────────────────────── */
-  .toc-sidebar {
-    width: 270px;
-    flex-shrink: 0;
-    background: var(--primary);
-    color: #cbd5e1;
-    position: sticky;
-    top: 0;
-    height: 100vh;
-    overflow-y: auto;
-    padding: 0 0 2rem 0;
-  }
-
-  .toc-logo {
-    background: rgba(0,0,0,0.3);
-    padding: 1.4rem 1.4rem 1.2rem;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
-  }
-
-  .toc-logo h2 {
-    font-size: 0.9rem;
-    font-weight: 700;
-    color: #93c5fd;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .toc-logo p {
-    font-size: 0.72rem;
-    color: #94a3b8;
-    margin-top: 0.3rem;
-  }
-
-  .toc-label {
-    font-size: 0.65rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #64748b;
-    padding: 1.2rem 1.4rem 0.4rem;
-  }
-
-  .toc-sidebar a {
-    display: block;
-    padding: 0.38rem 1.4rem;
-    font-size: 0.82rem;
-    color: #94a3b8;
-    text-decoration: none;
-    border-left: 3px solid transparent;
-    transition: all 0.15s;
-  }
-
-  .toc-sidebar a:hover,
-  .toc-sidebar a.active {
-    color: #e2e8f0;
-    background: rgba(255,255,255,0.06);
-    border-left-color: #60a5fa;
-  }
-
-  .toc-sidebar a.sub {
-    padding-left: 2.4rem;
-    font-size: 0.78rem;
-  }
-
-  /* ── Main Content ─────────────────────────────── */
-  .main-content {
-    flex: 1;
-    max-width: 960px;
-    margin: 0 auto;
-    padding: 3rem 3.5rem 6rem;
-  }
-
-  /* ── Cover / Title Page ───────────────────────── */
-  .cover {
-    text-align: center;
-    padding: 3rem 2rem 3.5rem;
-    background: linear-gradient(135deg, var(--primary) 0%, #0f4c81 60%, #1e40af 100%);
-    border-radius: 16px;
-    color: #fff;
-    margin-bottom: 3.5rem;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .cover::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
-  }
-
-  .cover-badge {
-    display: inline-block;
-    background: rgba(255,255,255,0.15);
-    border: 1px solid rgba(255,255,255,0.3);
-    color: #bfdbfe;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    padding: 0.35rem 1rem;
-    border-radius: 999px;
-    margin-bottom: 1.5rem;
-  }
-
-  .cover h1 {
-    font-size: 2.4rem;
-    font-weight: 800;
-    color: #fff;
-    line-height: 1.2;
-    margin-bottom: 0.8rem;
-    text-shadow: 0 2px 10px rgba(0,0,0,0.3);
-  }
-
-  .cover .subtitle {
-    font-size: 1.1rem;
-    color: #bfdbfe;
-    margin-bottom: 2rem;
-    font-weight: 400;
-  }
-
-  .cover-meta {
-    display: flex;
-    justify-content: center;
-    gap: 2rem;
-    flex-wrap: wrap;
-    font-size: 0.82rem;
-    color: #93c5fd;
-  }
-
-  .cover-meta span {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-
-  .cover-meta strong {
-    color: #e0f2fe;
-  }
-
-  .cover-divider {
-    width: 80px;
-    height: 3px;
-    background: linear-gradient(90deg, #60a5fa, #38bdf8);
-    border-radius: 2px;
-    margin: 1.8rem auto;
-  }
-
-  /* ── Section Headers ──────────────────────────── */
-  .doc-section {
-    margin-bottom: 3.5rem;
-    scroll-margin-top: 2rem;
-  }
-
-  .section-header {
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-    margin-bottom: 1.5rem;
-    padding-bottom: 0.8rem;
-    border-bottom: 2px solid var(--border);
-  }
-
-  .section-num {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 0.85rem;
-    font-weight: 700;
-    border-radius: 8px;
-    flex-shrink: 0;
-  }
-
-  .section-header h2 {
-    font-size: 1.55rem;
-    font-weight: 700;
-    color: var(--primary);
-  }
-
-  h3 {
-    font-size: 1.12rem;
-    font-weight: 700;
-    color: var(--primary);
-    margin: 2rem 0 0.8rem;
-    padding-left: 0.8rem;
-    border-left: 3px solid var(--accent);
-  }
-
-  h4 {
-    font-size: 0.97rem;
-    font-weight: 700;
-    color: var(--text);
-    margin: 1.4rem 0 0.5rem;
-  }
-
-  p {
-    margin-bottom: 1rem;
-    color: #334155;
-  }
-
-  /* ── Cards & Callouts ─────────────────────────── */
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1.4rem;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
-  }
-
-  .card-title {
-    font-size: 0.88rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--muted);
-    margin-bottom: 0.7rem;
-  }
-
-  .callout {
-    border-radius: 10px;
-    padding: 1.1rem 1.3rem;
-    margin: 1.4rem 0;
-    font-size: 0.9rem;
-    display: flex;
-    gap: 0.8rem;
-    align-items: flex-start;
-  }
-
-  .callout-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 0.05rem; }
-
-  .callout.info    { background: #eff6ff; border-left: 4px solid #3b82f6; color: #1e40af; }
-  .callout.success { background: #f0fdf4; border-left: 4px solid #22c55e; color: #14532d; }
-  .callout.warning { background: #fffbeb; border-left: 4px solid #f59e0b; color: #78350f; }
-  .callout.danger  { background: #fef2f2; border-left: 4px solid #ef4444; color: #7f1d1d; }
-
-  /* ── Tables ───────────────────────────────────── */
-  .table-wrap { overflow-x: auto; margin: 1.2rem 0; border-radius: 10px; border: 1px solid var(--border); }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.88rem;
-    background: var(--surface);
-  }
-
-  thead th {
-    background: var(--primary);
-    color: #e2e8f0;
-    text-align: left;
-    padding: 0.8rem 1rem;
-    font-size: 0.8rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  tbody td {
-    padding: 0.7rem 1rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: top;
-  }
-
-  tbody tr:last-child td { border-bottom: none; }
-  tbody tr:nth-child(even) { background: #f8fafc; }
-  tbody tr:hover { background: #f1f5f9; }
-
-  td strong { color: var(--accent); }
-
-  /* ── Code Blocks ──────────────────────────────── */
-  pre {
-    background: var(--code-bg);
-    color: var(--code-text);
-    border-radius: 10px;
-    padding: 1.3rem 1.5rem;
-    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    font-size: 0.83rem;
-    line-height: 1.6;
-    overflow-x: auto;
-    margin: 1.2rem 0;
-    border: 1px solid #334155;
-  }
-
-  code {
-    background: #f1f5f9;
-    color: #be185d;
-    padding: 0.15em 0.45em;
-    border-radius: 4px;
-    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    font-size: 0.85em;
-  }
-
-  pre code {
-    background: none;
-    color: inherit;
-    padding: 0;
-    font-size: inherit;
-  }
-
-  /* Syntax highlighting approximation */
-  .kw   { color: #93c5fd; }
-  .str  { color: #86efac; }
-  .cm   { color: #64748b; font-style: italic; }
-  .fn   { color: #fde68a; }
-  .num  { color: #f9a8d4; }
-  .cls  { color: #67e8f9; }
-
-  /* ── Tech Badges ──────────────────────────────── */
-  .badge-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin: 0.8rem 0;
-  }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.3rem 0.8rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-  }
-
-  .badge-blue   { background: #dbeafe; color: #1d4ed8; }
-  .badge-green  { background: #dcfce7; color: #15803d; }
-  .badge-orange { background: #ffedd5; color: #c2410c; }
-  .badge-purple { background: #f3e8ff; color: #7e22ce; }
-  .badge-red    { background: #fee2e2; color: #b91c1c; }
-  .badge-cyan   { background: #cffafe; color: #0e7490; }
-  .badge-gray   { background: #f1f5f9; color: #475569; }
-  .badge-yellow { background: #fefce8; color: #854d0e; }
-
-  /* ── Architecture Diagram ─────────────────────── */
-  .arch-diagram {
-    background: var(--code-bg);
-    border-radius: 12px;
-    padding: 1.8rem 2rem;
-    font-family: 'Cascadia Code', 'Fira Code', monospace;
-    font-size: 0.8rem;
-    line-height: 1.7;
-    color: #94a3b8;
-    overflow-x: auto;
-    margin: 1.4rem 0;
-  }
-
-  .arch-diagram .dir  { color: #60a5fa; font-weight: 700; }
-  .arch-diagram .file { color: #e2e8f0; }
-  .arch-diagram .cm   { color: #475569; font-style: italic; }
-  .arch-diagram .hl   { color: #fbbf24; }
-
-  /* ── Pipeline Flow ────────────────────────────── */
-  .pipeline {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    margin: 1.5rem 0;
-  }
-
-  .pipeline-step {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-  }
-
-  .pipeline-left {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 48px;
-    flex-shrink: 0;
-  }
-
-  .pipeline-dot {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: #fff;
-    font-size: 0.8rem;
-    font-weight: 700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    z-index: 1;
-    box-shadow: 0 0 0 4px #dbeafe;
-  }
-
-  .pipeline-line {
-    width: 2px;
-    flex: 1;
-    background: #bfdbfe;
-    min-height: 20px;
-  }
-
-  .pipeline-content {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1.2rem;
-    margin: 0 0 12px 12px;
-  }
-
-  .pipeline-content h4 {
-    margin: 0 0 0.3rem;
-    font-size: 0.95rem;
-    color: var(--primary);
-  }
-
-  .pipeline-content p {
-    margin: 0;
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-
-  .pipeline-content .tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-    margin-top: 0.5rem;
-  }
-
-  /* ── Feature Grid ─────────────────────────────── */
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 1rem;
-    margin: 1.2rem 0;
-  }
-
-  .feature-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.2rem;
-    border-top: 3px solid var(--accent);
-    transition: box-shadow 0.2s;
-  }
-
-  .feature-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
-
-  .feature-card .icon {
-    font-size: 1.6rem;
-    margin-bottom: 0.6rem;
-  }
-
-  .feature-card h4 {
-    font-size: 0.92rem;
-    margin: 0 0 0.4rem;
-    color: var(--primary);
-  }
-
-  .feature-card p {
-    font-size: 0.83rem;
-    color: var(--muted);
-    margin: 0;
-  }
-
-  /* ── API endpoint pills ───────────────────────── */
-  .method {
-    display: inline-block;
-    padding: 0.18em 0.55em;
-    border-radius: 4px;
-    font-size: 0.72rem;
-    font-weight: 700;
-    font-family: monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .method-get    { background: #dcfce7; color: #15803d; }
-  .method-post   { background: #fef9c3; color: #854d0e; }
-  .method-delete { background: #fee2e2; color: #b91c1c; }
-
-  /* ── Comparison table special ─────────────────── */
-  .check { color: #16a34a; font-weight: 700; }
-  .cross { color: #dc2626; font-weight: 700; }
-
-  /* ── Lists ────────────────────────────────────── */
-  ul, ol {
-    padding-left: 1.5rem;
-    margin-bottom: 1rem;
-  }
-
-  li { margin-bottom: 0.4rem; }
-
-  /* ── Print ────────────────────────────────────── */
-  @media print {
-    .toc-sidebar { display: none; }
-    .main-content { padding: 1rem 2rem; max-width: 100%; }
-    .cover { break-after: page; }
-    .doc-section { break-inside: avoid; }
-    pre { white-space: pre-wrap; }
-    a { color: inherit; text-decoration: none; }
-  }
-
-  /* ── Responsive ───────────────────────────────── */
-  @media (max-width: 900px) {
-    .toc-sidebar { display: none; }
-    .main-content { padding: 2rem 1.2rem 4rem; }
-    .cover h1 { font-size: 1.8rem; }
-    .feature-grid { grid-template-columns: 1fr; }
-  }
-
-  /* ── Footer ───────────────────────────────────── */
-  .doc-footer {
-    background: var(--primary);
-    color: #94a3b8;
-    text-align: center;
-    padding: 2rem;
-    font-size: 0.82rem;
-    border-radius: 12px;
-    margin-top: 3rem;
-  }
-
-  .doc-footer strong { color: #e2e8f0; }
-
-  /* ── References ───────────────────────────────── */
-  .ref-item {
-    padding: 0.9rem 1rem;
-    border-left: 3px solid var(--border);
-    margin-bottom: 0.8rem;
-    font-size: 0.88rem;
-    background: var(--surface);
-    border-radius: 0 8px 8px 0;
-  }
-
-  .ref-item:hover { border-left-color: var(--accent); }
-
-  .ref-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 0.72rem;
-    font-weight: 700;
-    border-radius: 4px;
-    margin-right: 0.6rem;
-  }
+/* ── Reset & Base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --primary:   #1a3a5c;
+  --accent:    #2563eb;
+  --accent2:   #0ea5e9;
+  --success:   #16a34a;
+  --warning:   #d97706;
+  --danger:    #dc2626;
+  --purple:    #7c3aed;
+  --teal:      #0891b2;
+  --bg:        #f1f5f9;
+  --surface:   #ffffff;
+  --border:    #e2e8f0;
+  --text:      #1e293b;
+  --muted:     #64748b;
+  --code-bg:   #1e293b;
+  --code-text: #e2e8f0;
+}
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+.page-wrapper { display: flex; min-height: 100vh; }
+
+/* ── Sidebar ─────────────────────────────────────────────────── */
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--primary);
+  color: #cbd5e1;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  padding-bottom: 2rem;
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+.sidebar-logo {
+  background: rgba(0,0,0,.35);
+  padding: 1.5rem 1.4rem 1.3rem;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.sidebar-logo h2 { font-size: .85rem; font-weight: 700; color: #93c5fd; letter-spacing: .1em; text-transform: uppercase; }
+.sidebar-logo p  { font-size: .72rem; color: #94a3b8; margin-top: .3rem; }
+.nav-group { padding: 1.1rem 1.4rem .3rem; font-size: .65rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: #475569; }
+.sidebar a {
+  display: block;
+  padding: .38rem 1.4rem;
+  font-size: .81rem;
+  color: #94a3b8;
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  transition: all .15s;
+}
+.sidebar a:hover, .sidebar a.active {
+  color: #e2e8f0;
+  background: rgba(255,255,255,.06);
+  border-left-color: #60a5fa;
+}
+.sidebar a.sub { padding-left: 2.6rem; font-size: .77rem; }
+
+/* ── Main ────────────────────────────────────────────────────── */
+.main { flex: 1; max-width: 980px; margin: 0 auto; padding: 3rem 3.5rem 6rem; }
+
+/* ── Cover ───────────────────────────────────────────────────── */
+.cover {
+  text-align: center;
+  padding: 3.5rem 2rem 3rem;
+  background: linear-gradient(135deg, #1a3a5c 0%, #0f4c81 55%, #1e40af 100%);
+  border-radius: 18px;
+  color: #fff;
+  margin-bottom: 3.5rem;
+  position: relative;
+  overflow: hidden;
+}
+.cover::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/svg%3E");
+}
+.cover-badge {
+  display: inline-block;
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.3);
+  color: #bfdbfe;
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: .35rem 1rem;
+  border-radius: 999px;
+  margin-bottom: 1.5rem;
+}
+.cover h1 { font-size: 2.4rem; font-weight: 800; margin-bottom: .8rem; position: relative; }
+.cover p.sub { font-size: 1rem; color: #bfdbfe; max-width: 600px; margin: 0 auto 2rem; position: relative; }
+.cover-meta { display: flex; justify-content: center; gap: 2.5rem; flex-wrap: wrap; position: relative; }
+.cover-meta span { font-size: .8rem; color: #bfdbfe; }
+.cover-meta strong { color: #fff; }
+
+/* ── Section ─────────────────────────────────────────────────── */
+.section { margin-bottom: 3.5rem; }
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--border);
+}
+.section-num {
+  width: 40px; height: 40px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; font-weight: 700; flex-shrink: 0;
+}
+.section-header h2 { font-size: 1.55rem; font-weight: 700; color: var(--primary); }
+h3 { font-size: 1.1rem; font-weight: 700; color: var(--primary); margin: 2rem 0 .8rem; }
+p { margin-bottom: 1rem; }
+
+/* ── Tech Card ───────────────────────────────────────────────── */
+.tech-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.6rem;
+  margin-bottom: 1.8rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,.05);
+}
+.tech-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.2rem;
+  margin-bottom: 1.2rem;
+}
+.tech-icon {
+  width: 52px; height: 52px;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.6rem;
+  flex-shrink: 0;
+}
+.icon-blue   { background: #eff6ff; }
+.icon-green  { background: #f0fdf4; }
+.icon-purple { background: #f5f3ff; }
+.icon-orange { background: #fff7ed; }
+.icon-teal   { background: #f0fdfa; }
+.icon-red    { background: #fff1f2; }
+.icon-gray   { background: #f8fafc; }
+.icon-yellow { background: #fefce8; }
+
+.tech-card-header-text h3 { margin: 0 0 .25rem; font-size: 1.15rem; }
+.tech-card-header-text .version {
+  display: inline-block;
+  background: #f1f5f9;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  padding: .15rem .6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.why-box {
+  background: #eff6ff;
+  border-left: 4px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: .8rem 1.1rem;
+  margin: 1rem 0;
+  font-size: .9rem;
+}
+.why-box strong { color: var(--accent); }
+
+/* ── Feature Grid ────────────────────────────────────────────── */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.feature-item {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.2rem;
+}
+.feature-item .fi-title { font-weight: 600; font-size: .9rem; color: var(--primary); margin-bottom: .3rem; }
+.feature-item .fi-desc  { font-size: .82rem; color: var(--muted); line-height: 1.5; }
+
+/* ── Code ────────────────────────────────────────────────────── */
+pre {
+  background: var(--code-bg);
+  color: var(--code-text);
+  border-radius: 10px;
+  padding: 1.3rem 1.5rem;
+  font-size: .82rem;
+  overflow-x: auto;
+  line-height: 1.7;
+  margin: 1rem 0;
+  font-family: 'Consolas', 'JetBrains Mono', monospace;
+}
+code {
+  font-family: 'Consolas', 'JetBrains Mono', monospace;
+  font-size: .88em;
+  background: #f1f5f9;
+  color: #dc2626;
+  padding: .15em .4em;
+  border-radius: 5px;
+}
+pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+
+/* ── Table ───────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .88rem; }
+th {
+  background: var(--primary);
+  color: #fff;
+  padding: .65rem 1rem;
+  text-align: left;
+  font-size: .8rem;
+  font-weight: 600;
+  letter-spacing: .03em;
+}
+th:first-child { border-radius: 8px 0 0 0; }
+th:last-child  { border-radius: 0 8px 0 0; }
+td { padding: .6rem 1rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:hover td { background: #f8fafc; }
+
+/* ── Badge ───────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.badge-blue   { background: #dbeafe; color: #1d4ed8; }
+.badge-green  { background: #dcfce7; color: #15803d; }
+.badge-purple { background: #ede9fe; color: #6d28d9; }
+.badge-orange { background: #ffedd5; color: #c2410c; }
+.badge-teal   { background: #ccfbf1; color: #0f766e; }
+.badge-red    { background: #fee2e2; color: #b91c1c; }
+.badge-gray   { background: #f1f5f9; color: #475569; }
+.badge-yellow { background: #fef9c3; color: #854d0e; }
+
+/* ── Module Card ─────────────────────────────────────────────── */
+.module-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-bottom: 1.5rem;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0,0,0,.04);
+}
+.module-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.4rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.module-header h4 { font-size: 1rem; font-weight: 700; color: var(--primary); }
+.module-body { padding: 1.2rem 1.4rem; }
+.method-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+.method-list li { display: flex; gap: .8rem; align-items: flex-start; }
+.method-name { font-family: monospace; font-size: .85rem; color: #2563eb; font-weight: 600; white-space: nowrap; }
+.method-desc { font-size: .85rem; color: var(--muted); }
+
+/* ── Pipeline Steps ──────────────────────────────────────────── */
+.pipeline { display: flex; flex-direction: column; gap: 0; margin: 1.5rem 0; }
+.step {
+  display: flex;
+  gap: 1.2rem;
+  position: relative;
+  padding-bottom: 1.5rem;
+}
+.step:last-child { padding-bottom: 0; }
+.step-line {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+.step-num {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  font-size: .9rem;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  z-index: 1;
+}
+.step-connector {
+  width: 2px;
+  flex: 1;
+  background: linear-gradient(to bottom, var(--accent), #93c5fd);
+  margin-top: .3rem;
+  min-height: 20px;
+}
+.step:last-child .step-connector { display: none; }
+.step-content { padding-top: .3rem; flex: 1; }
+.step-content h4 { font-size: .95rem; font-weight: 700; color: var(--primary); margin-bottom: .3rem; }
+.step-content p  { font-size: .86rem; color: var(--muted); margin-bottom: 0; }
+
+/* ── API Table ───────────────────────────────────────────────── */
+.api-row td:first-child { font-family: monospace; font-size: .82rem; }
+.method-post { background: #dcfce7; color: #15803d; padding:.15rem .5rem; border-radius: 4px; font-size:.75rem; font-weight:700; }
+.method-get  { background: #dbeafe; color: #1d4ed8; padding:.15rem .5rem; border-radius: 4px; font-size:.75rem; font-weight:700; }
+
+/* ── Alert ───────────────────────────────────────────────────── */
+.alert {
+  display: flex;
+  gap: .8rem;
+  padding: 1rem 1.2rem;
+  border-radius: 10px;
+  margin: 1rem 0;
+  font-size: .88rem;
+}
+.alert-info    { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+.alert-success { background: #f0fdf4; border: 1px solid #bbf7d0; color: #15803d; }
+.alert-warning { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+
+/* ── Comparison Table ────────────────────────────────────────── */
+.compare-yes { color: var(--success); font-weight: 700; }
+.compare-no  { color: var(--danger);  font-weight: 700; }
+.compare-partial { color: var(--warning); font-weight: 700; }
+
+/* ── Architecture Diagram ────────────────────────────────────── */
+.arch-diagram {
+  background: var(--surface);
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+  padding: 2rem;
+  margin: 1.5rem 0;
+  font-family: monospace;
+  font-size: .82rem;
+  line-height: 2;
+  color: var(--muted);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .sidebar { display: none; }
+  .main { padding: 1.5rem 1.2rem 4rem; }
+  .cover h1 { font-size: 1.7rem; }
+  .feature-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 580px) {
+  .feature-grid { grid-template-columns: 1fr; }
+  .cover-meta { gap: 1rem; }
+}
 </style>
 </head>
 <body>
 <div class="page-wrapper">
 
-  <!-- ══════════════════════════════ SIDEBAR ══ -->
-  <nav class="toc-sidebar">
-    <div class="toc-logo">
-      <h2>🔍 ForensicPlatform</h2>
-      <p>Technical Documentation v1.0</p>
+<!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <h2>🔍 ForensicPlatform</h2>
+    <p>Technical Documentation v2.0</p>
+  </div>
+
+  <div class="nav-group">Overview</div>
+  <a href="#s1">1. Introduction</a>
+  <a href="#s2">2. System Architecture</a>
+
+  <div class="nav-group">Technology Stack</div>
+  <a href="#s3">3. Technology Choices</a>
+  <a href="#s3-fastapi" class="sub">FastAPI (Python)</a>
+  <a href="#s3-motor" class="sub">Motor / MongoDB</a>
+  <a href="#s3-tsk" class="sub">The Sleuth Kit</a>
+  <a href="#s3-exiftool" class="sub">ExifTool</a>
+  <a href="#s3-sqlite" class="sub">SQLite3</a>
+  <a href="#s3-openai" class="sub">OpenAI GPT</a>
+  <a href="#s3-frontend" class="sub">Frontend Stack</a>
+  <a href="#s3-deployment" class="sub">Deployment Stack</a>
+
+  <div class="nav-group">Codebase</div>
+  <a href="#s4">4. Module Reference</a>
+  <a href="#s4-analyzer" class="sub">analyzer.py</a>
+  <a href="#s4-disk" class="sub">disk_analysis.py</a>
+  <a href="#s4-artifact" class="sub">artifact_extractor.py</a>
+  <a href="#s4-timeline" class="sub">timeline_builder.py</a>
+  <a href="#s4-keyword" class="sub">keyword_search.py</a>
+  <a href="#s4-ai" class="sub">ai_summary.py</a>
+  <a href="#s4-report" class="sub">report_generator.py</a>
+  <a href="#s4-db" class="sub">database.py</a>
+  <a href="#s4-config" class="sub">config.py</a>
+
+  <div class="nav-group">Pipeline & API</div>
+  <a href="#s5">5. Forensic Pipeline</a>
+  <a href="#s6">6. REST API Reference</a>
+  <a href="#s7">7. Data Models</a>
+
+  <div class="nav-group">Operations</div>
+  <a href="#s8">8. Deployment Guide</a>
+  <a href="#s9">9. Security & Integrity</a>
+  <a href="#s10">10. Limitations & Roadmap</a>
+  <a href="#s11">11. Conclusion</a>
+</nav>
+
+<!-- ═══════════════════════ MAIN ═══════════════════════════ -->
+<main class="main">
+
+<!-- COVER -->
+<div class="cover">
+  <div class="cover-badge">Graduate Capstone Project</div>
+  <h1>Digital Forensics Investigation Platform</h1>
+  <p class="sub">A production-grade, AI-powered forensic investigation system for disk image analysis, artifact extraction, and automated evidence reporting.</p>
+  <div class="cover-meta">
+    <span><strong>Version</strong> 2.0.0</span>
+    <span><strong>Backend</strong> FastAPI + Python 3.11</span>
+    <span><strong>Database</strong> MongoDB (Motor async)</span>
+    <span><strong>Frontend</strong> Cloudflare Pages</span>
+    <span><strong>Hosting</strong> Render.com</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 1 — INTRODUCTION
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s1">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <h2>Introduction</h2>
+  </div>
+
+  <h3>1.1 What Is This Platform?</h3>
+  <p>The <strong>Digital Forensics Investigation Platform</strong> is a full-stack web application that automates the end-to-end process of digital evidence analysis. An investigator uploads a piece of digital evidence — a raw disk image, an EnCase E01 file, an ISO, or a logical file — and the platform automatically:</p>
+  <ul style="margin:.5rem 0 1rem 1.5rem; line-height:2;">
+    <li>Detects the evidence type using magic bytes and file signatures</li>
+    <li>Computes cryptographic hashes (MD5, SHA-1, SHA-256) for integrity verification</li>
+    <li>Runs full disk analysis: partition table, filesystem info, all files, deleted files, inodes</li>
+    <li>Recovers deleted files using <code>tsk_recover</code></li>
+    <li>Extracts browser history from Chrome, Firefox, and Edge SQLite databases</li>
+    <li>Pulls EXIF metadata (camera model, GPS, timestamps) from image files</li>
+    <li>Catalogs multimedia (images, videos) and documents (PDF, Word, Excel)</li>
+    <li>Builds a forensic MAC-time timeline using <code>fls</code> and <code>mactime</code></li>
+    <li>Performs deep keyword search across filenames, content, browser history, metadata, and SQLite databases</li>
+    <li>Optionally generates an AI-powered investigation summary via OpenAI GPT</li>
+    <li>Produces a rich, interactive HTML forensic report</li>
+  </ul>
+
+  <h3>1.2 Target Users</h3>
+  <p>This platform is designed for digital forensics students, academic researchers, and investigators who need a self-hosted, open-source alternative to commercial tools like Autopsy, FTK, and EnCase — accessible through a modern browser without any local installation.</p>
+
+  <h3>1.3 Key Differentiators</h3>
+  <div class="feature-grid">
+    <div class="feature-item">
+      <div class="fi-title">🌐 Browser-Based</div>
+      <div class="fi-desc">No installation needed on the analyst's machine. Upload evidence from any device.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🤖 AI-Powered Summaries</div>
+      <div class="fi-desc">GPT-4o-mini generates professional narrative forensic reports from raw findings.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🔍 Multi-Source Search</div>
+      <div class="fi-desc">Keyword search spans filenames, content, browser URLs, metadata, and SQLite DBs.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">📊 Interactive Reports</div>
+      <div class="fi-desc">HTML reports with lightboxes, video players, filterable tables, and timelines.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🏗️ Modular Architecture</div>
+      <div class="fi-desc">Each forensic capability is a separate Python class, easy to extend or replace.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">☁️ Cloud-Ready</div>
+      <div class="fi-desc">Deploys to Render.com backend + Cloudflare Pages frontend out of the box.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 2 — ARCHITECTURE
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s2">
+  <div class="section-header">
+    <div class="section-num">2</div>
+    <h2>System Architecture</h2>
+  </div>
+
+  <h3>2.1 High-Level Architecture</h3>
+  <p>The platform follows a classic <strong>three-tier architecture</strong>: a static SPA frontend hosted on Cloudflare Pages, a FastAPI backend on Render.com, and MongoDB Atlas as the persistent store.</p>
+
+<div class="arch-diagram">
+┌─────────────────────────────────────────────────────────────┐
+│                    CLIENT BROWSER                           │
+│          cloudflare-frontend/index.html (SPA)               │
+│    Inter font · Font Awesome · Vanilla JS · CSS vars        │
+└────────────────────────┬────────────────────────────────────┘
+                         │ HTTPS (Cloudflare Worker proxy)
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 CLOUDFLARE WORKER (_worker.js)              │
+│   • Proxies /api/* and /storage/* to Render backend         │
+│   • Serves static assets from ASSETS binding               │
+│   • CORS header injection                                   │
+└────────────────────────┬────────────────────────────────────┘
+                         │ HTTPS
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│            RENDER.COM — FastAPI Backend (Python 3.11)       │
+│                                                             │
+│   main.py  ──►  routes/        ──►  services/modules/       │
+│                 evidence.py        analyzer.py              │
+│                 analysis.py        disk_analysis.py         │
+│                 search.py          artifact_extractor.py    │
+│                 report.py          timeline_builder.py      │
+│                 health.py          keyword_search.py        │
+│                                    ai_summary.py            │
+│                                    report_generator.py      │
+│                                                             │
+│   Forensic Tools (CLI):                                     │
+│   Sleuth Kit (mmls·fsstat·fls·ils·tsk_recover·mactime)      │
+│   ExifTool    PhotoRec    Foremost                          │
+└───────────────────┬─────────────────────────────────────────┘
+                    │ Motor (async)
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    MONGODB ATLAS                             │
+│   Collections:  evidence  ·  analysis_results  ·  search_index │
+└─────────────────────────────────────────────────────────────┘
+</div>
+
+  <h3>2.2 Project Directory Structure</h3>
+<pre><code>webapp/
+├── backend/                    ← FastAPI application root
+│   ├── main.py                 ← App factory, routers, lifecycle
+│   ├── config.py               ← All env vars + path constants
+│   ├── database.py             ← Motor/MongoDB singleton
+│   ├── models/
+│   │   ├── evidence.py         ← EvidenceCreate, EvidenceOut, Enums
+│   │   ├── analysis.py         ← AnalysisResult, FileEntry, BrowserEntry…
+│   │   └── search.py           ← SearchHit, SearchRequest, SearchResponse
+│   ├── routes/
+│   │   ├── evidence.py         ← POST /upload-evidence, GET /evidence/{id}
+│   │   ├── analysis.py         ← POST /analyze/{id}, GET /results/{id}
+│   │   ├── search.py           ← GET /search
+│   │   ├── report.py           ← GET /report/{id}
+│   │   └── health.py           ← GET /health
+│   ├── modules/                ← Core forensic engine
+│   │   ├── analyzer.py         ← Evidence type detection + hashing
+│   │   ├── disk_analysis.py    ← TSK wrapper (mmls/fsstat/fls/ils)
+│   │   ├── artifact_extractor.py ← Browser history, EXIF, multimedia
+│   │   ├── timeline_builder.py ← fls + mactime timeline
+│   │   ├── keyword_search.py   ← Multi-source keyword engine
+│   │   ├── ai_summary.py       ← OpenAI GPT summarization
+│   │   └── report_generator.py ← Interactive HTML report
+│   ├── storage/
+│   │   ├── uploads/            ← Raw evidence files
+│   │   ├── recovered/          ← tsk_recover output per job
+│   │   └── reports/            ← Generated HTML reports per job
+│   ├── static/                 ← CSS served at /static
+│   ├── templates/              ← Jinja2 base templates
+│   └── requirements.txt
+├── cloudflare-frontend/        ← Deployed to Cloudflare Pages
+│   ├── index.html              ← Full SPA (9-step UI, drag-drop)
+│   ├── _worker.js              ← Edge proxy worker
+│   └── _routes.json            ← Route configuration
+├── docs/
+│   └── documentation.html      ← This file
+├── render.yaml                 ← Render IaC config
+├── wrangler.toml               ← Cloudflare Pages config
+└── README.md</code></pre>
+
+  <h3>2.3 Request Data Flow</h3>
+  <div class="pipeline">
+    <div class="step">
+      <div class="step-line"><div class="step-num">1</div><div class="step-connector"></div></div>
+      <div class="step-content"><h4>File Upload</h4><p>Browser POSTs multipart form to <code>/api/upload-evidence</code>. FastAPI saves to <code>storage/uploads/{uuid}/</code> and creates an <code>evidence</code> document in MongoDB with status <code>uploaded</code>.</p></div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">2</div><div class="step-connector"></div></div>
+      <div class="step-content"><h4>Analysis Trigger</h4><p>Client POSTs to <code>/api/analyze/{id}</code>. FastAPI launches the full pipeline as a <strong>BackgroundTask</strong> and immediately returns <code>202 Accepted</code>.</p></div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">3</div><div class="step-connector"></div></div>
+      <div class="step-content"><h4>Forensic Pipeline Execution</h4><p>Background task runs all modules sequentially: type detection → hashing → disk analysis → file recovery → artifact extraction → timeline → keyword search → AI summary → report generation. Progress is written to MongoDB in real time.</p></div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">4</div><div class="step-connector"></div></div>
+      <div class="step-content"><h4>Status Polling</h4><p>Frontend polls <code>/api/results/{id}</code> every 3 s. Response includes <code>progress</code> (0–100) and <code>log[]</code> entries for live display.</p></div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">5</div><div class="step-connector"></div></div>
+      <div class="step-content"><h4>Results & Report</h4><p>On completion, the frontend navigates to the interactive HTML report at <code>/api/report/{id}</code> or fetches structured JSON from <code>/api/results/{id}</code> for the dashboard view.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 3 — TECHNOLOGY STACK
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s3">
+  <div class="section-header">
+    <div class="section-num">3</div>
+    <h2>Technology Stack &amp; Justification</h2>
+  </div>
+  <p>Every technology was deliberately chosen. This section documents each choice, explains its features used in the project, and justifies why it was selected over alternatives.</p>
+
+  <!-- ── FastAPI ── -->
+  <div class="tech-card" id="s3-fastapi">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-blue">⚡</div>
+      <div class="tech-card-header-text">
+        <h3>FastAPI — Backend Web Framework</h3>
+        <span class="version">Python 3.11 · FastAPI ≥ 0.109 · Uvicorn</span>
+      </div>
     </div>
 
-    <div class="toc-label">Contents</div>
-    <a href="#s1">1. Introduction</a>
-    <a href="#s1-1" class="sub">1.1 Background</a>
-    <a href="#s1-2" class="sub">1.2 Motivation</a>
-    <a href="#s1-3" class="sub">1.3 Objectives</a>
+    <div class="why-box"><strong>Why FastAPI?</strong> Forensic analysis involves long-running CPU-bound tool calls (Sleuth Kit, ExifTool) and I/O-bound database writes. FastAPI's async/await model lets the server handle hundreds of status-polling requests concurrently while a background worker processes the disk image — impossible with synchronous Flask or Django.</div>
 
-    <a href="#s2">2. System Architecture</a>
-    <a href="#s2-1" class="sub">2.1 High-Level Design</a>
-    <a href="#s2-2" class="sub">2.2 Directory Structure</a>
-    <a href="#s2-3" class="sub">2.3 Data Flow</a>
-
-    <a href="#s3">3. Technology Stack</a>
-    <a href="#s3-1" class="sub">3.1 Backend — FastAPI</a>
-    <a href="#s3-2" class="sub">3.2 The Sleuth Kit</a>
-    <a href="#s3-3" class="sub">3.3 ExifTool</a>
-    <a href="#s3-4" class="sub">3.4 OpenAI GPT</a>
-    <a href="#s3-5" class="sub">3.5 Frontend Stack</a>
-    <a href="#s3-6" class="sub">3.6 Infrastructure</a>
-
-    <a href="#s4">4. Core Modules</a>
-    <a href="#s4-1" class="sub">4.1 ForensicAnalyzer</a>
-    <a href="#s4-2" class="sub">4.2 DiskAnalyzer</a>
-    <a href="#s4-3" class="sub">4.3 ArtifactExtractor</a>
-    <a href="#s4-4" class="sub">4.4 TimelineBuilder</a>
-    <a href="#s4-5" class="sub">4.5 KeywordSearchEngine</a>
-    <a href="#s4-6" class="sub">4.6 AISummarizer</a>
-    <a href="#s4-7" class="sub">4.7 ReportGenerator</a>
-
-    <a href="#s5">5. Analysis Pipeline</a>
-    <a href="#s6">6. API Reference</a>
-    <a href="#s7">7. Security & Forensic Integrity</a>
-    <a href="#s8">8. Deployment</a>
-    <a href="#s9">9. Comparison & Justification</a>
-    <a href="#s10">10. Limitations & Future Work</a>
-    <a href="#s11">11. Conclusion</a>
-    <a href="#s12">12. References</a>
-  </nav>
-
-  <!-- ══════════════════════════════ MAIN ═══════ -->
-  <main class="main-content">
-
-    <!-- ── COVER ── -->
-    <div class="cover">
-      <div class="cover-badge">Graduate Project — Technical Documentation</div>
-      <h1>Digital Forensics<br>Investigation Platform</h1>
-      <div class="cover-divider"></div>
-      <p class="subtitle">
-        A Professional Web-Based Forensic Examination System<br>
-        Powered by FastAPI · The Sleuth Kit · OpenAI GPT
-      </p>
-      <div class="cover-meta">
-        <span><strong>Author:</strong> Ayah Majali</span>
-        <span><strong>Year:</strong> 2025</span>
-        <span><strong>Version:</strong> 1.0.0</span>
-        <span><strong>GitHub:</strong> ayahmajali/forensic-platform</span>
+    <h3>Features Used in This Project</h3>
+    <div class="feature-grid">
+      <div class="feature-item">
+        <div class="fi-title">🔄 Async Background Tasks</div>
+        <div class="fi-desc"><code>BackgroundTasks</code> runs the full forensic pipeline without blocking the HTTP response. Analysis can take minutes for large images.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">📋 Pydantic Data Models</div>
+        <div class="fi-desc">All request/response bodies are validated by Pydantic models (EvidenceCreate, AnalysisResult, SearchHit). Ensures type safety throughout.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">📁 Multipart File Upload</div>
+        <div class="fi-desc"><code>python-multipart</code> handles streaming uploads up to 4 GB, saving evidence files to disk with UUID-named directories.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">🔒 CORS Middleware</div>
+        <div class="fi-desc"><code>CORSMiddleware</code> allows the Cloudflare Pages frontend (different domain) to call the Render.com API securely.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">📦 Static File Mounting</div>
+        <div class="fi-desc"><code>StaticFiles</code> serves the <code>/static</code>, <code>/storage/reports</code>, and <code>/storage/recovered</code> directories so generated reports and images are downloadable.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">🧩 Router Separation</div>
+        <div class="fi-desc">Each domain (evidence, analysis, search, report, health) lives in its own <code>APIRouter</code>, keeping <code>main.py</code> clean and each route file focused.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">♻️ Lifespan Context Manager</div>
+        <div class="fi-desc">The modern <code>@asynccontextmanager lifespan</code> pattern replaces deprecated <code>on_event</code> hooks for clean MongoDB connect/disconnect at startup and shutdown.</div>
+      </div>
+      <div class="feature-item">
+        <div class="fi-title">📖 Auto Documentation</div>
+        <div class="fi-desc">Swagger UI at <code>/docs</code> and ReDoc at <code>/redoc</code> are auto-generated from code, giving the team live API docs with no extra effort.</div>
       </div>
     </div>
 
-    <!-- ════════════════════════════════════════════
-         SECTION 1 — INTRODUCTION
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s1">
-      <div class="section-header">
-        <div class="section-num">1</div>
-        <h2>Introduction</h2>
+    <h3>Why Not Flask / Django?</h3>
+    <table>
+      <tr><th>Criterion</th><th>FastAPI</th><th>Flask</th><th>Django</th></tr>
+      <tr><td>Async native</td><td class="compare-yes">✔ Full async/await</td><td class="compare-no">✘ WSGI sync only</td><td class="compare-partial">~ Since 4.0</td></tr>
+      <tr><td>Data validation</td><td class="compare-yes">✔ Pydantic built-in</td><td class="compare-no">✘ Manual</td><td class="compare-partial">~ Forms only</td></tr>
+      <tr><td>Auto API docs</td><td class="compare-yes">✔ OpenAPI/Swagger</td><td class="compare-no">✘ Plugin required</td><td class="compare-no">✘ Plugin required</td></tr>
+      <tr><td>Performance</td><td class="compare-yes">✔ Starlette ASGI</td><td class="compare-partial">~ WSGI</td><td class="compare-partial">~ WSGI/ASGI</td></tr>
+      <tr><td>Type hints</td><td class="compare-yes">✔ First class</td><td class="compare-no">✘ Optional bolt-on</td><td class="compare-no">✘ Optional bolt-on</td></tr>
+    </table>
+  </div>
+
+  <!-- ── Motor / MongoDB ── -->
+  <div class="tech-card" id="s3-motor">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-green">🍃</div>
+      <div class="tech-card-header-text">
+        <h3>Motor &amp; MongoDB — Async Database Layer</h3>
+        <span class="version">Motor (async) · PyMongo ≥ 4.6 · MongoDB Atlas</span>
       </div>
+    </div>
 
-      <h3 id="s1-1">1.1 Background</h3>
-      <p>
-        Digital forensics is the scientific discipline of recovering, preserving, and analysing
-        electronically stored information (ESI) in a way that is legally admissible. As cybercrime,
-        data breaches, and insider threats proliferate, the demand for automated, reproducible, and
-        scalable forensic tooling continues to grow in both law‑enforcement and enterprise contexts.
-      </p>
-      <p>
-        Traditional forensic suites such as <strong>Autopsy</strong>, <strong>FTK (Forensic Toolkit)</strong>,
-        and <strong>EnCase</strong> are powerful but require installation on a forensic workstation,
-        carry significant hardware requirements, and operate exclusively through desktop GUIs.
-        A web‑based platform eliminates these barriers: any authorised investigator with a browser
-        can submit evidence and receive a structured, shareable report without local tool installation.
-      </p>
+    <div class="why-box"><strong>Why MongoDB?</strong> Forensic analysis results are deeply nested, variable-length JSON documents. A single analysis result may contain 10,000 file entries, 500 browser history records, and a multi-page AI summary — all with different shapes. MongoDB's document model stores this naturally without joins, while Motor's async driver integrates perfectly with FastAPI's event loop.</div>
 
-      <h3 id="s1-2">1.2 Motivation</h3>
-      <div class="feature-grid">
-        <div class="feature-card">
-          <div class="icon">🖥️</div>
-          <h4>Desktop Tool Limitations</h4>
-          <p>Enterprise tools like Autopsy require Windows/macOS installation and are impractical for cloud or remote environments.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">⚡</div>
-          <h4>Automation Gap</h4>
-          <p>Investigators still manually run multiple CLI tools (mmls, fls, exiftool). A unified pipeline reduces human error.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">🤖</div>
-          <h4>AI-Augmented Triage</h4>
-          <p>LLM models can now produce human‑readable forensic summaries from structured findings, accelerating triage time.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">📱</div>
-          <h4>Mobile Access</h4>
-          <p>Field investigators need responsive interfaces accessible on tablets and phones without VPN or desktop apps.</p>
-        </div>
+    <h3>Features Used in This Project</h3>
+    <div class="feature-grid">
+      <div class="feature-item">
+        <div class="fi-title">📄 Document Storage</div>
+        <div class="fi-desc">The <code>analysis_results</code> collection stores the complete result of a forensic job as a single BSON document — no complex JOIN queries needed to retrieve everything.</div>
       </div>
-
-      <h3 id="s1-3">1.3 Objectives</h3>
-      <ol>
-        <li>Build a web-based forensic investigation platform accessible via any modern browser.</li>
-        <li>Integrate <strong>The Sleuth Kit</strong> CLI tools into a fully automated analysis pipeline.</li>
-        <li>Support disk images (E01, DD/RAW, IMG, ISO) and logical files (PDF, DOCX, JPG, etc.).</li>
-        <li>Extract browser history, EXIF metadata, multimedia artefacts, and deleted files automatically.</li>
-        <li>Generate AI-powered investigation summaries using the OpenAI GPT-4o-mini model.</li>
-        <li>Produce self-contained, interactive HTML reports with embedded timeline and search.</li>
-        <li>Provide a RESTful API for integration with SIEM / SOAR platforms.</li>
-        <li>Deploy on Render.com with full CI/CD via GitHub and maintain chain-of-custody hashing.</li>
-      </ol>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 2 — ARCHITECTURE
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s2">
-      <div class="section-header">
-        <div class="section-num">2</div>
-        <h2>System Architecture</h2>
+      <div class="feature-item">
+        <div class="fi-title">🔍 Full-Text Search Index</div>
+        <div class="fi-desc">The <code>search_index</code> collection uses a compound text index on <code>content</code> and <code>file_path</code> fields, enabling fast <code>$text</code> queries across all indexed evidence files.</div>
       </div>
-
-      <h3 id="s2-1">2.1 High-Level Design</h3>
-      <p>
-        The platform follows a <strong>three-tier architecture</strong>: a browser-based frontend, a
-        Python FastAPI backend server, and an analysis engine that orchestrates CLI forensic tools.
-        All communication between tiers is over HTTP/REST with JSON payloads.
-      </p>
-
-      <div class="card">
-        <div class="card-title">Architectural Tiers</div>
-        <div class="arch-diagram">
-<span class="cm">┌────────────────────────────────────────────────────────────────────┐</span>
-<span class="cm">│                         CLIENT (Browser)                           │</span>
-<span class="cm">│  ┌─────────────────────────────────────────────────────────────┐   │</span>
-<span class="cm">│  │  index.html · Vanilla JS · Tailwind CSS (CDN) · Font Awesome │   │</span>
-<span class="cm">│  │  • File drag-and-drop upload     • Real-time progress polling │   │</span>
-<span class="cm">│  │  • Toast notifications           • Jobs list management       │   │</span>
-<span class="cm">│  │  • Mobile responsive (≤320 px)   • Interactive HTML report    │   │</span>
-<span class="cm">│  └─────────────────────────────────────────────────────────────┘   │</span>
-<span class="cm">└───────────────────────────┬────────────────────────────────────────┘</span>
-                            <span class="cm">│  HTTP / REST (JSON)  multipart/form-data</span>
-<span class="cm">┌───────────────────────────▼────────────────────────────────────────┐</span>
-<span class="cm">│                    BACKEND — FastAPI (Python 3.11)                  │</span>
-<span class="cm">│  ┌──────────────────────────────────────────────────────────────┐  │</span>
-<span class="cm">│  │  main.py  •  CORS middleware  •  Jinja2 templates             │  │</span>
-<span class="cm">│  │  BackgroundTasks  •  In-memory job store                     │  │</span>
-<span class="cm">│  │  Static mounts: /static  /reports  /recovered                │  │</span>
-<span class="cm">│  └──────────────────────────────────────────────────────────────┘  │</span>
-<span class="cm">└───────────────────────────┬────────────────────────────────────────┘</span>
-                            <span class="cm">│  subprocess / sqlite3 / os</span>
-<span class="cm">┌───────────────────────────▼────────────────────────────────────────┐</span>
-<span class="cm">│                       ANALYSIS ENGINE                              │</span>
-<span class="cm">│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │</span>
-<span class="cm">│  │analyzer  │  │disk_anal │  │artifact   │  │timeline_builder  │  │</span>
-<span class="cm">│  │.py       │  │ysis.py   │  │_extractor │  │.py               │  │</span>
-<span class="cm">│  └────┬─────┘  └────┬─────┘  └─────┬─────┘  └────────┬─────────┘  │</span>
-<span class="cm">│  ┌────┴─────┐  ┌────┴─────┐  ┌─────┴─────┐  ┌────────┴─────────┐  │</span>
-<span class="cm">│  │hashlib   │  │mmls fls  │  │sqlite3    │  │fls -m  mactime   │  │</span>
-<span class="cm">│  │(MD5,SHA) │  │fsstat ils│  │exiftool   │  │filesystem stat   │  │</span>
-<span class="cm">│  │          │  │tsk_recov │  │photorec   │  │                  │  │</span>
-<span class="cm">│  └──────────┘  └──────────┘  └───────────┘  └──────────────────┘  │</span>
-<span class="cm">│  ┌──────────┐  ┌──────────┐  ┌───────────────────────────────────┐  │</span>
-<span class="cm">│  │keyword   │  │ai_summary│  │report_generator.py                │  │</span>
-<span class="cm">│  │_search   │  │.py       │  │(Self-contained HTML report)       │  │</span>
-<span class="cm">│  │.py       │  │(OpenAI)  │  │                                   │  │</span>
-<span class="cm">│  └──────────┘  └──────────┘  └───────────────────────────────────┘  │</span>
-<span class="cm">└────────────────────────────────────────────────────────────────────┘</span>
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">⚡ Async Client (Motor)</div>
+        <div class="fi-desc">Motor provides a fully async PyMongo wrapper. All DB operations use <code>await</code>, preventing the event loop from blocking during slow Atlas queries.</div>
       </div>
-
-      <h3 id="s2-2">2.2 Directory Structure</h3>
-      <div class="arch-diagram">
-<span class="dir">forensic-platform/</span>
-├── <span class="dir">backend/</span>                  <span class="cm"># All Python server code</span>
-│   ├── <span class="file">main.py</span>               <span class="cm"># FastAPI app, routes, BackgroundTasks</span>
-│   ├── <span class="file">start.py</span>              <span class="cm"># Startup banner + uvicorn launcher</span>
-│   ├── <span class="file">requirements.txt</span>      <span class="cm"># Python dependencies</span>
-│   ├── <span class="file">.env.example</span>          <span class="cm"># Sample environment variables</span>
-│   ├── <span class="dir">modules/</span>              <span class="cm"># Core analysis engine modules</span>
-│   │   ├── <span class="hl">analyzer.py</span>       <span class="cm"># Evidence type detection + hashing</span>
-│   │   ├── <span class="hl">disk_analysis.py</span>  <span class="cm"># Sleuth Kit wrapper (mmls, fls, etc.)</span>
-│   │   ├── <span class="hl">artifact_extractor.py</span> <span class="cm"># Browser history, EXIF, multimedia</span>
-│   │   ├── <span class="hl">timeline_builder.py</span>   <span class="cm"># MAC-time forensic timeline</span>
-│   │   ├── <span class="hl">keyword_search.py</span>     <span class="cm"># Multi-source keyword search</span>
-│   │   ├── <span class="hl">report_generator.py</span>   <span class="cm"># Interactive HTML report (1274 lines)</span>
-│   │   └── <span class="hl">ai_summary.py</span>         <span class="cm"># OpenAI GPT summarization</span>
-│   ├── <span class="dir">templates/</span>
-│   │   └── <span class="file">index.html</span>        <span class="cm"># Main UI (Jinja2)</span>
-│   ├── <span class="dir">static/</span>               <span class="cm"># Custom CSS</span>
-│   ├── <span class="dir">uploads/</span>              <span class="cm"># Evidence upload storage (git-ignored)</span>
-│   ├── <span class="dir">reports/</span>              <span class="cm"># Generated HTML reports</span>
-│   └── <span class="dir">recovered/</span>            <span class="cm"># tsk_recover output per job</span>
-├── <span class="dir">docs/</span>
-│   └── <span class="file">documentation.html</span>    <span class="cm"># ← This document</span>
-├── <span class="file">ecosystem.config.cjs</span>      <span class="cm"># PM2 process manager config</span>
-├── <span class="file">render.yaml</span>               <span class="cm"># Render.com deployment config</span>
-├── <span class="file">Procfile</span>                  <span class="cm"># Heroku-style process file</span>
-├── <span class="file">runtime.txt</span>               <span class="cm"># Python version declaration</span>
-├── <span class="file">requirements.txt</span>          <span class="cm"># Root-level for deployment platforms</span>
-├── <span class="file">.gitignore</span>                <span class="cm"># Excludes uploads, reports, __pycache__</span>
-└── <span class="file">README.md</span>                 <span class="cm"># Developer documentation</span>
+      <div class="feature-item">
+        <div class="fi-title">🏊 Connection Pooling</div>
+        <div class="fi-desc">The <code>Database</code> singleton class configures <code>maxPoolSize=20</code>, reusing TCP connections across requests for efficiency.</div>
       </div>
-
-      <h3 id="s2-3">2.3 Data Flow</h3>
-      <p>The investigation lifecycle follows eight sequential stages, all managed by <code>run_full_analysis()</code>
-      as a FastAPI <code>BackgroundTask</code>:</p>
-
-      <div class="pipeline">
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">1</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Evidence Upload &amp; Job Creation</h4>
-            <p>Client submits <code>multipart/form-data</code> POST to <code>/api/investigate</code>. File is saved to <code>uploads/</code> with a UUID job ID prefix. A job record is inserted into the in-memory store with status <em>queued</em>.</p>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">2</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Evidence Type Detection</h4>
-            <p>ForensicAnalyzer inspects file extension AND reads the first 512 bytes (magic bytes) to classify the evidence as <em>disk_image</em>, <em>e01</em>, <em>iso</em>, or <em>logical_file</em>.</p>
-            <div class="tools"><span class="badge badge-blue">hashlib</span><span class="badge badge-gray">magic bytes</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">3</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Cryptographic Hashing</h4>
-            <p>MD5, SHA-1, and SHA-256 digests computed in 64 KB chunks for large-file compatibility. Hashes establish evidence integrity and enable chain-of-custody verification.</p>
-            <div class="tools"><span class="badge badge-green">hashlib (Python stdlib)</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">4</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Disk Image Analysis (conditional)</h4>
-            <p>If the evidence is a disk image, DiskAnalyzer executes <code>mmls</code> (partition table), <code>fsstat</code> (filesystem info), <code>fls -r</code> (all files), <code>fls -rd</code> (deleted files), <code>ils</code> (inodes), and <code>tsk_recover</code> (file extraction).</p>
-            <div class="tools"><span class="badge badge-orange">mmls</span><span class="badge badge-orange">fsstat</span><span class="badge badge-orange">fls</span><span class="badge badge-orange">ils</span><span class="badge badge-orange">tsk_recover</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">5</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Artifact Extraction</h4>
-            <p>ArtifactExtractor walks the recovered directory, reads SQLite browser databases (Chrome History, Firefox places.sqlite), extracts EXIF using ExifTool, and catalogues all multimedia and document files.</p>
-            <div class="tools"><span class="badge badge-purple">sqlite3</span><span class="badge badge-purple">exiftool</span><span class="badge badge-gray">photorec</span><span class="badge badge-gray">foremost</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">6</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Timeline Construction</h4>
-            <p>TimelineBuilder generates a MAC-time (Modified/Accessed/Changed) timeline using <code>fls -r -m</code> body file + <code>mactime</code>. Falls back to <code>os.stat()</code> filesystem timestamps if TSK is unavailable.</p>
-            <div class="tools"><span class="badge badge-orange">fls -r -m</span><span class="badge badge-orange">mactime</span><span class="badge badge-gray">os.stat</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">7</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>Keyword Search</h4>
-            <p>KeywordSearchEngine runs five parallel search strategies per keyword: filename scan, text-file content, browser history, EXIF metadata, and SQLite cell scan. Supports email and URL pattern extraction via regex.</p>
-            <div class="tools"><span class="badge badge-cyan">regex</span><span class="badge badge-purple">sqlite3</span><span class="badge badge-gray">os.walk</span></div>
-          </div>
-        </div>
-        <div class="pipeline-step">
-          <div class="pipeline-left"><div class="pipeline-dot">8</div><div class="pipeline-line"></div></div>
-          <div class="pipeline-content">
-            <h4>AI Summary + Report Generation</h4>
-            <p>AISummarizer calls OpenAI GPT-4o-mini with a structured forensic prompt. ReportGenerator assembles all findings into a self-contained HTML report (embedded base64 images, interactive JS search, responsive sidebar).</p>
-            <div class="tools"><span class="badge badge-red">OpenAI API</span><span class="badge badge-blue">HTML/CSS/JS</span><span class="badge badge-gray">base64</span></div>
-          </div>
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">📊 Performance Indexes</div>
+        <div class="fi-desc">Created at startup: <code>upload_date</code> and <code>status</code> indexes on <code>evidence</code>; unique <code>evidence_id</code> index on <code>analysis_results</code>.</div>
       </div>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 3 — TECHNOLOGY STACK
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s3">
-      <div class="section-header">
-        <div class="section-num">3</div>
-        <h2>Technology Stack &amp; Justification</h2>
+      <div class="feature-item">
+        <div class="fi-title">🔗 Flexible Schema</div>
+        <div class="fi-desc">Different evidence types produce different result shapes. MongoDB allows some jobs to have partition tables while others (logical files) skip that field entirely.</div>
       </div>
+    </div>
 
-      <p>
-        Every technology was selected based on four criteria: <strong>forensic correctness</strong>,
-        <strong>performance</strong>, <strong>deployment simplicity</strong>, and
-        <strong>community adoption</strong> in the digital forensics field.
-      </p>
+    <h3>Three MongoDB Collections</h3>
+    <table>
+      <tr><th>Collection</th><th>Purpose</th><th>Key Fields</th></tr>
+      <tr><td><code>evidence</code></td><td>Evidence file registry</td><td>id, filename, type, status, hash_md5, hash_sha256, upload_date</td></tr>
+      <tr><td><code>analysis_results</code></td><td>Full forensic results</td><td>evidence_id, partitions, files_list, deleted_files, browser_history, metadata, timeline, ai_summary, report_url</td></tr>
+      <tr><td><code>search_index</code></td><td>Full-text search index</td><td>evidence_id, file_path, content, keywords, source_type</td></tr>
+    </table>
+  </div>
 
-      <!-- ── 3.1 FastAPI ── -->
-      <h3 id="s3-1">3.1 Backend Framework — FastAPI (Python 3.11)</h3>
-
-      <div class="badge-row">
-        <span class="badge badge-blue">Python 3.11</span>
-        <span class="badge badge-blue">FastAPI 0.109+</span>
-        <span class="badge badge-blue">Uvicorn ASGI</span>
-        <span class="badge badge-green">Async / Await</span>
-        <span class="badge badge-purple">Pydantic</span>
+  <!-- ── The Sleuth Kit ── -->
+  <div class="tech-card" id="s3-tsk">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-orange">🗂️</div>
+      <div class="tech-card-header-text">
+        <h3>The Sleuth Kit (TSK) — Disk Image Analysis</h3>
+        <span class="version">mmls · fsstat · fls · ils · tsk_recover · mactime</span>
       </div>
+    </div>
 
-      <p>
-        FastAPI is a modern, high-performance web framework for Python based on standard type hints.
-        It was chosen over alternatives (Flask, Django, Express) for the following reasons:
-      </p>
+    <div class="why-box"><strong>Why Sleuth Kit?</strong> TSK is the gold-standard, open-source forensic toolkit trusted in real investigations and accepted by courts. It reads raw disk images (E01, DD, ISO) at the block level without mounting them — essential for forensic soundness because mounting can alter timestamps and metadata.</div>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Feature</th>
-              <th>FastAPI</th>
-              <th>Flask</th>
-              <th>Django</th>
-              <th>Express (Node)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Async I/O support</td>
-              <td><span class="check">✔ Native</span></td>
-              <td><span class="cross">✗ Extension</span></td>
-              <td><span class="cross">✗ Limited</span></td>
-              <td><span class="check">✔ Native</span></td>
-            </tr>
-            <tr>
-              <td>Automatic OpenAPI docs</td>
-              <td><span class="check">✔ Built-in</span></td>
-              <td><span class="cross">✗ Plugin</span></td>
-              <td><span class="cross">✗ Plugin</span></td>
-              <td><span class="cross">✗ Manual</span></td>
-            </tr>
-            <tr>
-              <td>Type validation (Pydantic)</td>
-              <td><span class="check">✔ Built-in</span></td>
-              <td><span class="cross">✗</span></td>
-              <td><span class="cross">✗</span></td>
-              <td><span class="cross">✗</span></td>
-            </tr>
-            <tr>
-              <td>Background task support</td>
-              <td><span class="check">✔ Native</span></td>
-              <td><span class="cross">✗ Celery req.</span></td>
-              <td><span class="cross">✗ Celery req.</span></td>
-              <td><span class="cross">✗ Bull req.</span></td>
-            </tr>
-            <tr>
-              <td>Python ecosystem (subprocess, hashlib)</td>
-              <td><span class="check">✔ Full</span></td>
-              <td><span class="check">✔ Full</span></td>
-              <td><span class="check">✔ Full</span></td>
-              <td><span class="cross">✗ N/A</span></td>
-            </tr>
-            <tr>
-              <td>Performance (requests/sec)</td>
-              <td><strong>~58,000</strong></td>
-              <td>~16,000</td>
-              <td>~12,000</td>
-              <td>~42,000</td>
-            </tr>
-          </tbody>
-        </table>
+    <h3>TSK Commands Used</h3>
+    <table>
+      <tr><th>Command</th><th>What It Does</th><th>Output Used For</th></tr>
+      <tr><td><code>mmls</code></td><td>Reads partition table (MBR/GPT). Lists all partitions with start/end sectors, lengths, and descriptions.</td><td>Partition listing, byte-offset calculation for other tools</td></tr>
+      <tr><td><code>fsstat</code></td><td>Displays filesystem metadata: type (NTFS/FAT32/ext4), volume name, block size, block count, last mount time.</td><td>Filesystem info section of the report</td></tr>
+      <tr><td><code>fls -r</code></td><td>Recursively lists all files and directories in the filesystem, including their inodes.</td><td>Complete file listing (capped at 5,000)</td></tr>
+      <tr><td><code>fls -r -d</code></td><td>Lists only deleted files (unallocated inode entries). The <code>r/-</code> flag marks deleted entries.</td><td>Deleted files section, highlighted in red</td></tr>
+      <tr><td><code>fls -r -m /</code></td><td>Outputs body file format: MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime — for timeline construction.</td><td>Input to <code>mactime</code></td></tr>
+      <tr><td><code>ils</code></td><td>Lists inode information directly from disk — detects inodes allocated without directory entries (orphaned files).</td><td>Inode listing (capped at 1,000)</td></tr>
+      <tr><td><code>tsk_recover</code></td><td>Recovers files from a disk image into an output directory. Handles both active and deleted/unallocated files.</td><td>Populates <code>storage/recovered/{job_id}/</code></td></tr>
+      <tr><td><code>mactime</code></td><td>Converts body file into a chronological MAC-time timeline (Modified / Accessed / Changed). Output is CSV.</td><td>Timeline section of the report (capped at 2,000 events)</td></tr>
+    </table>
+
+    <div class="alert alert-info">
+      <span>ℹ️</span>
+      <span>All TSK tools are invoked via Python's <code>subprocess.run()</code> with explicit timeouts (120–300 s), <code>capture_output=True</code>, and <code>encoding="utf-8", errors="replace"</code> to handle non-UTF filenames gracefully. If a tool is not installed, the platform falls back to filesystem-based analysis.</span>
+    </div>
+
+    <h3>Supported Evidence Formats</h3>
+    <div class="feature-grid">
+      <div class="feature-item"><div class="fi-title">E01 / EWF</div><div class="fi-desc">EnCase Evidence Format. Magic bytes: <code>EVF</code>. Most common in professional forensics.</div></div>
+      <div class="feature-item"><div class="fi-title">DD / RAW / IMG</div><div class="fi-desc">Sector-by-sector raw disk image. Detected by MBR signature <code>0x55AA</code> at byte 510.</div></div>
+      <div class="feature-item"><div class="fi-title">ISO 9660</div><div class="fi-desc">Optical disc image. Magic: <code>CD001</code> at offset 1. Used for CD/DVD evidence.</div></div>
+      <div class="feature-item"><div class="fi-title">Logical Files</div><div class="fi-desc">Individual files (PDF, DOCX, JPG, etc.) — no disk analysis, only artifact extraction applies.</div></div>
+    </div>
+  </div>
+
+  <!-- ── ExifTool ── -->
+  <div class="tech-card" id="s3-exiftool">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-teal">📷</div>
+      <div class="tech-card-header-text">
+        <h3>ExifTool — Metadata Extraction</h3>
+        <span class="version">Phil Harvey's ExifTool · CLI via subprocess</span>
       </div>
+    </div>
 
-      <div class="callout info">
-        <span class="callout-icon">ℹ️</span>
-        <div>
-          <strong>Why not Node.js / Express?</strong> The entire forensic toolchain (Sleuth Kit, ExifTool,
-          PhotoRec) is invoked via Python's <code>subprocess</code> module. Python's <code>hashlib</code>,
-          <code>sqlite3</code>, and <code>pathlib</code> standard library modules are ideal for forensic
-          file analysis. Switching to Node.js would introduce unnecessary complexity.
-        </div>
+    <div class="why-box"><strong>Why ExifTool?</strong> ExifTool reads metadata from over 100 file formats and extracts forensically valuable fields: GPS coordinates, camera make/model/serial number, software used, creation and modification timestamps. It outputs clean JSON, making programmatic parsing trivial. No Python-native alternative covers as many formats.</div>
+
+    <h3>Fields Extracted</h3>
+    <table>
+      <tr><th>Field</th><th>Forensic Significance</th></tr>
+      <tr><td><code>Make</code>, <code>Model</code></td><td>Identifies the device that created the image — useful for linking photos to a specific phone or camera</td></tr>
+      <tr><td><code>SerialNumber</code></td><td>Uniquely identifies a specific camera unit</td></tr>
+      <tr><td><code>DateTimeOriginal</code></td><td>When the image was captured — embeds in the image regardless of filesystem timestamps</td></tr>
+      <tr><td><code>CreateDate</code>, <code>ModifyDate</code></td><td>File creation and last modification in the image's EXIF stream</td></tr>
+      <tr><td><code>GPSLatitude</code>, <code>GPSLongitude</code></td><td>Geographic location where the photo was taken — powerful investigative intelligence</td></tr>
+      <tr><td><code>GPSPosition</code></td><td>Combined GPS string for display</td></tr>
+      <tr><td><code>Software</code></td><td>Editing software used (e.g., Adobe Photoshop) — indicates image manipulation</td></tr>
+    </table>
+    <p>ExifTool is called with <code>-json</code> flag per file, then <code>json.loads()</code> parses the result. Falls back to <code>os.stat()</code> timestamps if ExifTool is unavailable.</p>
+  </div>
+
+  <!-- ── SQLite3 ── -->
+  <div class="tech-card" id="s3-sqlite">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-purple">🗄️</div>
+      <div class="tech-card-header-text">
+        <h3>SQLite3 — Browser Artifact Parsing &amp; Search</h3>
+        <span class="version">Python stdlib sqlite3 · No external dependency</span>
       </div>
+    </div>
 
-      <h4>Key FastAPI Features Used</h4>
-      <ul>
-        <li><strong>BackgroundTasks</strong> — runs the 8-step analysis pipeline asynchronously without blocking the HTTP response, allowing the UI to poll for progress via <code>/api/status/{job_id}</code>.</li>
-        <li><strong>UploadFile + aiofiles</strong> — async chunked file writes prevent the server from blocking during large evidence uploads (multi-GB disk images).</li>
-        <li><strong>CORSMiddleware</strong> — allows the frontend (or future mobile app) to call the API from any origin.</li>
-        <li><strong>StaticFiles mount</strong> — serves the <code>/static</code>, <code>/reports</code>, and <code>/recovered</code> directories efficiently without custom route handlers.</li>
-        <li><strong>Jinja2Templates</strong> — renders <code>index.html</code> server-side, enabling dynamic injection of environment-specific configuration.</li>
-      </ul>
+    <div class="why-box"><strong>Why SQLite3?</strong> Modern browsers (Chrome, Firefox, Edge) store their history, cookies, and bookmarks in SQLite databases. Python's built-in <code>sqlite3</code> module lets the platform read these databases directly from recovered files without any external tools. It is also used by the keyword search engine to scan any SQLite database found in recovered files.</div>
 
-      <pre><code><span class="cm"># Example: Non-blocking file upload + background analysis</span>
-<span class="kw">@app.post</span>(<span class="str">"/api/investigate"</span>)
-<span class="kw">async def</span> <span class="fn">start_investigation</span>(
-    background_tasks: BackgroundTasks,
-    evidence: UploadFile = File(...),
-    keywords: str = Form(default=<span class="str">"password,bitcoin,secret"</span>)
-):
-    job_id = str(uuid.uuid4())[:<span class="num">8</span>]
-    <span class="kw">async with</span> aiofiles.open(evidence_path, <span class="str">'wb'</span>) <span class="kw">as</span> f:
-        <span class="kw">await</span> f.write(<span class="kw">await</span> evidence.read())   <span class="cm"># async I/O</span>
-    background_tasks.add_task(              <span class="cm"># non-blocking</span>
-        run_full_analysis, job_id, evidence_path, ...
-    )
-    <span class="kw">return</span> JSONResponse({<span class="str">"job_id"</span>: job_id, <span class="str">"status"</span>: <span class="str">"queued"</span>})</code></pre>
+    <h3>Browser Database Schemas Parsed</h3>
+    <table>
+      <tr><th>Browser</th><th>Database File</th><th>Tables Queried</th><th>Fields Extracted</th></tr>
+      <tr><td>Chrome / Edge</td><td><code>History</code></td><td><code>urls</code> JOIN <code>visits</code></td><td>url, title, visit_count, visit_time (microseconds since 1601-01-01)</td></tr>
+      <tr><td>Firefox</td><td><code>places.sqlite</code></td><td><code>moz_places</code> JOIN <code>moz_historyvisits</code></td><td>url, title, visit_count, visit_date (microseconds since Unix epoch)</td></tr>
+    </table>
 
-      <!-- ── 3.2 Sleuth Kit ── -->
-      <h3 id="s3-2">3.2 The Sleuth Kit (TSK)</h3>
+    <h3>Timestamp Conversion</h3>
+<pre><code># Chrome: microseconds since Windows epoch (1601-01-01)
+ts = (row["visit_time"] / 1_000_000) - 11_644_473_600
+datetime.utcfromtimestamp(ts)
 
-      <div class="badge-row">
-        <span class="badge badge-orange">mmls</span>
-        <span class="badge badge-orange">fsstat</span>
-        <span class="badge badge-orange">fls</span>
-        <span class="badge badge-orange">ils</span>
-        <span class="badge badge-orange">tsk_recover</span>
-        <span class="badge badge-orange">mactime</span>
-        <span class="badge badge-gray">Open Source (GPL v2)</span>
+# Firefox: microseconds since Unix epoch (1970-01-01)
+ts = row["visit_date"] / 1_000_000
+datetime.utcfromtimestamp(ts)</code></pre>
+
+    <h3>SQLite Magic Byte Detection</h3>
+    <p>Before attempting to open a file as SQLite, the engine checks for the 16-byte magic string <code>SQLite format 3</code> to avoid errors on non-database files with misleading names.</p>
+
+    <h3>Deep SQLite Search</h3>
+    <p>The keyword search engine also scans <em>any</em> SQLite file found in recovered data — not just browser databases. It reads all tables up to 1,000 rows each and searches every string column for the keyword, covering app databases, messaging apps, and system logs.</p>
+  </div>
+
+  <!-- ── OpenAI GPT ── -->
+  <div class="tech-card" id="s3-openai">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-yellow">🤖</div>
+      <div class="tech-card-header-text">
+        <h3>OpenAI GPT-4o-mini — AI Summarization</h3>
+        <span class="version">gpt-4o-mini (default) · OpenAI Chat Completions API</span>
       </div>
+    </div>
 
-      <p>
-        <strong>The Sleuth Kit (TSK)</strong>, originally created by Brian Carrier and maintained by the
-        forensic community, is the industry-standard open-source framework for file system forensics.
-        It supports FAT12/16/32, exFAT, NTFS, ext2/3/4, HFS+, APFS, ISO 9660, and more.
-      </p>
+    <div class="why-box"><strong>Why GPT-4o-mini?</strong> Forensic data is vast and technical. Presenting an investigator with 10,000 file entries requires human-readable interpretation. GPT-4o-mini converts structured findings into a professional 5-section narrative report in seconds. It is selected over GPT-4 for cost efficiency (much cheaper per token) while still producing high-quality professional text for this summarization task.</div>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Tool</th><th>Function</th><th>Platform Module</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>mmls</code></td>
-              <td>Reads partition table (MBR/GPT). Returns slot, start sector, end sector, length, and partition type for each entry.</td>
-              <td>disk_analysis.py → <code>run_mmls()</code></td>
-            </tr>
-            <tr>
-              <td><code>fsstat</code></td>
-              <td>Extracts filesystem metadata: type (NTFS, FAT32, ext4), volume name, block size, last mount time.</td>
-              <td>disk_analysis.py → <code>run_fsstat()</code></td>
-            </tr>
-            <tr>
-              <td><code>fls</code></td>
-              <td>Lists files and directories from a filesystem image. <code>-r</code> for recursive, <code>-d</code> for deleted-only, <code>-m</code> for body file generation.</td>
-              <td>disk_analysis.py → <code>run_fls()</code></td>
-            </tr>
-            <tr>
-              <td><code>ils</code></td>
-              <td>Lists allocated and unallocated inode entries. Useful for detecting anti-forensics (inode gaps).</td>
-              <td>disk_analysis.py → <code>run_ils()</code></td>
-            </tr>
-            <tr>
-              <td><code>tsk_recover</code></td>
-              <td>Recovers all allocated (and optionally deleted) files from a disk image to an output directory.</td>
-              <td>disk_analysis.py → <code>recover_files()</code></td>
-            </tr>
-            <tr>
-              <td><code>mactime</code></td>
-              <td>Converts <code>fls -m</code> body files into sorted timeline entries (MAC — Modified, Accessed, Changed).</td>
-              <td>timeline_builder.py → <code>build_tsk_timeline()</code></td>
-            </tr>
-          </tbody>
-        </table>
+    <h3>How the AI Summary Works</h3>
+    <div class="feature-grid">
+      <div class="feature-item">
+        <div class="fi-title">📝 Structured Prompt</div>
+        <div class="fi-desc">The prompt is constructed from real analysis data: file counts, deleted files, browser URLs, GPS count, camera models, and keyword hits. No hallucination risk — all facts come from the actual scan.</div>
       </div>
-
-      <div class="callout success">
-        <span class="callout-icon">✅</span>
-        <div>
-          <strong>Why TSK over Python-only libraries?</strong> Python libraries such as
-          <code>pytsk3</code> (Python bindings for TSK) or <code>dfvfs</code> (Digital Forensics
-          Virtual File System) exist, but invoke the same underlying TSK C libraries. Using the
-          native CLI tools directly avoids binding version conflicts, supports the widest range
-          of filesystem types, and produces output identical to what court-accepted tools generate.
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">🔌 Direct HTTPS API Call</div>
+        <div class="fi-desc">Uses Python's <code>urllib.request</code> (stdlib) — not the <code>openai</code> package — to POST to <code>https://api.openai.com/v1/chat/completions</code>. Reduces dependency weight.</div>
       </div>
-
-      <h4>Resilient Subprocess Execution</h4>
-      <p>All TSK commands are wrapped in <code>DiskAnalyzer._run_cmd()</code> with:</p>
-      <ul>
-        <li>Configurable timeouts (120–300 seconds depending on operation).</li>
-        <li>Graceful fallback when tools are not installed (<code>FileNotFoundError</code> caught).</li>
-        <li>UTF-8 decoding with <code>errors="replace"</code> to handle binary output safely.</li>
-        <li>Return code inspection to distinguish tool errors from empty results.</li>
-      </ul>
-
-      <!-- ── 3.3 ExifTool ── -->
-      <h3 id="s3-3">3.3 ExifTool</h3>
-
-      <div class="badge-row">
-        <span class="badge badge-green">exiftool -json</span>
-        <span class="badge badge-green">GPS extraction</span>
-        <span class="badge badge-green">Camera serial numbers</span>
-        <span class="badge badge-gray">Phil Harvey (GPL)</span>
+      <div class="feature-item">
+        <div class="fi-title">🛡️ Graceful Fallback</div>
+        <div class="fi-desc">If <code>OPENAI_API_KEY</code> is not set, or the API call fails, <code>_template_summary()</code> generates an equally structured Markdown report using only local data — no AI required.</div>
       </div>
-
-      <p>
-        <strong>ExifTool</strong> by Phil Harvey is the gold-standard tool for reading, writing,
-        and editing metadata in image, video, audio, and document files. It supports over 22,000
-        unique tags across 150+ file formats.
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Capability</th><th>Forensic Significance</th></tr></thead>
-          <tbody>
-            <tr>
-              <td>GPS Latitude/Longitude</td>
-              <td>Geo-locates where a photo was taken — can corroborate or contradict a suspect's claimed location</td>
-            </tr>
-            <tr>
-              <td>DateTimeOriginal / CreateDate</td>
-              <td>Camera-recorded timestamp (before any OS file-copy timestamp modification)</td>
-            </tr>
-            <tr>
-              <td>Camera Make &amp; Model</td>
-              <td>Links a specific physical device to digital evidence</td>
-            </tr>
-            <tr>
-              <td>Serial Number</td>
-              <td>Uniquely identifies the camera body — can be matched to purchase records</td>
-            </tr>
-            <tr>
-              <td>Software field</td>
-              <td>Reveals photo editing software (Photoshop, GIMP) — may indicate manipulation</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="feature-item">
+        <div class="fi-title">📄 5-Section Output</div>
+        <div class="fi-desc">The AI is instructed to produce: Executive Summary, Key Findings, Suspicious Activity, Recommended Follow-up, and Evidence Integrity Statement — professional court-ready language.</div>
       </div>
+    </div>
 
-      <pre><code><span class="cm"># ExifTool invocation in artifact_extractor.py</span>
-result = subprocess.run(
-    [<span class="str">"exiftool"</span>, <span class="str">"-json"</span>, <span class="str">"-GPS*"</span>, <span class="str">"-Make"</span>, <span class="str">"-Model"</span>,
-     <span class="str">"-SerialNumber"</span>, <span class="str">"-DateTimeOriginal"</span>, <span class="str">"-Software"</span>, str(file_path)],
-    capture_output=<span class="kw">True</span>, text=<span class="kw">True</span>, timeout=<span class="num">30</span>
-)
-meta = json.loads(result.stdout)[<span class="num">0</span>]
-<span class="cm"># Returns: {"Make": "Apple", "Model": "iPhone 14 Pro",
-#           "GPSLatitude": 51.5074, "GPSLongitude": -0.1278, ...}</span></code></pre>
+    <h3>Prompt Engineering Strategy</h3>
+<pre><code>System: "You are a professional digital forensics investigator writing official case reports."
 
-      <!-- ── 3.4 OpenAI GPT ── -->
-      <h3 id="s3-4">3.4 AI Summarization — OpenAI GPT-4o-mini</h3>
+User prompt includes:
+  - Evidence filename, type, SHA256, MD5, size
+  - Count of recovered files, images, videos, documents
+  - Count of deleted files and timeline events
+  - Number of browser history entries + top 5 domains
+  - Number of files with EXIF + GPS count
+  - Keyword search hits (e.g., "password: 3 hits", ".exe: 14 hits")
 
-      <div class="badge-row">
-        <span class="badge badge-red">OpenAI API</span>
-        <span class="badge badge-red">GPT-4o-mini</span>
-        <span class="badge badge-yellow">Temperature 0.3</span>
-        <span class="badge badge-yellow">Max tokens 1000</span>
+  "Write a professional forensic summary in Markdown with:
+   1. Executive Summary (2-3 sentences)
+   2. Key Findings (bullet points)
+   3. Suspicious Activity (if any)
+   4. Recommended Follow-up Actions
+   5. Evidence Integrity Statement"</code></pre>
+
+    <div class="alert alert-warning">
+      <span>⚠️</span>
+      <span><strong>Security note:</strong> The API key is stored as a Render.com environment secret (never in code or git). The key can also be provided per-request through the UI, stored temporarily in the browser session only.</span>
+    </div>
+  </div>
+
+  <!-- ── Frontend ── -->
+  <div class="tech-card" id="s3-frontend">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-teal">🖥️</div>
+      <div class="tech-card-header-text">
+        <h3>Frontend Stack — Vanilla JS SPA on Cloudflare Pages</h3>
+        <span class="version">HTML5 · CSS Custom Properties · Vanilla JS · Font Awesome · Inter Font</span>
       </div>
+    </div>
 
-      <p>
-        The platform integrates OpenAI's <strong>GPT-4o-mini</strong> model to generate human-readable
-        forensic investigation summaries. The model was chosen over GPT-4o (full) because:
-      </p>
-      <ul>
-        <li><strong>Cost efficiency</strong> — 15× cheaper per token while maintaining strong reasoning for structured forensic prompts.</li>
-        <li><strong>Latency</strong> — typically responds in 3–8 seconds vs 15–30 seconds for GPT-4o.</li>
-        <li><strong>Instruction following</strong> — reliably produces structured Markdown output (Executive Summary, Key Findings, Recommendations) with <code>temperature=0.3</code>.</li>
-      </ul>
+    <div class="why-box"><strong>Why Vanilla JS (no React/Vue)?</strong> A forensic investigation tool needs reliability over developer experience. Vanilla JS has zero runtime dependencies, no build step required, and no version-upgrade risk. The SPA fits comfortably in a single <code>index.html</code> file that deploys to Cloudflare Pages in seconds with no bundler.</div>
 
-      <h4>Prompt Engineering Strategy</h4>
-      <p>The system prompt declares the model as a <em>"senior digital forensics investigator"</em>.
-      The user prompt provides structured JSON-like context including evidence hashes, file counts,
-      browser domains, GPS count, and suspicious keywords, then requests a specific 5-section
-      Markdown report. This <em>constrained output</em> approach ensures consistent, court-ready formatting.</p>
-
-      <div class="callout warning">
-        <span class="callout-icon">⚠️</span>
-        <div>
-          <strong>Graceful Fallback:</strong> If <code>OPENAI_API_KEY</code> is not configured or the
-          API call fails, the platform automatically generates a structured template-based summary
-          using <code>AISummarizer._template_summary()</code>. This ensures the investigation pipeline
-          always completes successfully even without network connectivity.
-        </div>
+    <h3>Frontend Features</h3>
+    <div class="feature-grid">
+      <div class="feature-item">
+        <div class="fi-title">🎨 CSS Custom Properties</div>
+        <div class="fi-desc">Design token system in <code>:root</code> (colors, radii, shadows, spacing) enables consistent theming and easy updates without preprocessors.</div>
       </div>
-
-      <!-- ── 3.5 Frontend ── -->
-      <h3 id="s3-5">3.5 Frontend Technology</h3>
-
-      <div class="badge-row">
-        <span class="badge badge-cyan">Vanilla JavaScript (ES6+)</span>
-        <span class="badge badge-cyan">Tailwind CSS v3 (CDN)</span>
-        <span class="badge badge-cyan">Font Awesome 6.4 (CDN)</span>
-        <span class="badge badge-cyan">Jinja2 templating</span>
+      <div class="feature-item">
+        <div class="fi-title">📤 Drag-and-Drop Upload</div>
+        <div class="fi-desc"><code>dragover</code>, <code>dragleave</code>, and <code>drop</code> events provide native drag-and-drop file upload with visual feedback.</div>
       </div>
-
-      <div class="callout info">
-        <span class="callout-icon">💡</span>
-        <div>
-          <strong>Why Vanilla JS over React/Svelte/SolidJS?</strong>
-          The original brief mentioned React, Svelte, or SolidJS. After evaluation, Vanilla JS
-          was chosen for the following reasons: (1) No build step required — the backend serves
-          a single Jinja2-rendered HTML file with no npm pipeline; (2) Zero bundle size —
-          all libraries are CDN-loaded, keeping the deployment artifact small;
-          (3) The UI logic (file upload, progress polling, job list) is straightforward and
-          does not require component state management that would justify a framework;
-          (4) Works immediately on Python-only hosting (Render.com) without a separate
-          Node.js build step.
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">🔄 Polling Progress</div>
+        <div class="fi-desc"><code>setInterval</code>-based polling of <code>/api/results/{id}</code> every 3 s updates the progress bar, step indicators, and live log output in real time.</div>
       </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Library</th><th>Version</th><th>Purpose</th><th>Why CDN?</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><strong>Tailwind CSS</strong></td>
-              <td>v3 (CDN)</td>
-              <td>Utility-first responsive styling, design tokens, breakpoints (768px, 600px, 480px, 380px)</td>
-              <td>No PostCSS build needed; JIT engine runs in-browser</td>
-            </tr>
-            <tr>
-              <td><strong>Font Awesome</strong></td>
-              <td>6.4.0</td>
-              <td>Icon system (upload, shield, progress, job status icons)</td>
-              <td>SVG sprite or npm would add build complexity</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="feature-item">
+        <div class="fi-title">📱 Responsive Layout</div>
+        <div class="fi-desc">CSS Grid and Flexbox with <code>@media</code> breakpoints at 900 px and 580 px ensure full mobile-friendly layout on phones and tablets.</div>
       </div>
-
-      <h4>Key Frontend Features</h4>
-      <ul>
-        <li><strong>Drag &amp; Drop Upload Zone</strong> — <code>dragenter</code>, <code>dragleave</code>, <code>drop</code> events with visual feedback.</li>
-        <li><strong>Progress Polling</strong> — <code>setInterval</code> polls <code>/api/status/{job_id}</code> every 1.5 seconds; updates progress bar, percentage, and live log stream.</li>
-        <li><strong>Toast Notification System</strong> — auto-dismissing contextual alerts (success, error, info) repositioned to 72px from bottom on mobile.</li>
-        <li><strong>Responsive Breakpoints</strong> — 768px (compact nav), 600px (bottom navigation bar), 480px (hero text), 380px (extra-small Android devices).</li>
-        <li><strong>Fixed Bottom Navigation</strong> — four-tab mobile nav bar (Upload, Analyze, Jobs, Status) with smooth scroll anchors.</li>
-        <li><strong>OpenAI Key Management</strong> — runtime API key input with toggle visibility; sends key to <code>/api/config/openai</code> for session-scoped storage.</li>
-      </ul>
-
-      <!-- ── 3.6 Infrastructure ── -->
-      <h3 id="s3-6">3.6 Infrastructure &amp; Deployment</h3>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Component</th><th>Technology</th><th>Justification</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><strong>Python Package Mgmt</strong></td>
-              <td>pip + requirements.txt</td>
-              <td>Universal standard; supported by all Python hosting platforms</td>
-            </tr>
-            <tr>
-              <td><strong>ASGI Server</strong></td>
-              <td>Uvicorn (with standard extras)</td>
-              <td>Fastest Python ASGI server; recommended by FastAPI; supports HTTP/1.1 and WebSocket</td>
-            </tr>
-            <tr>
-              <td><strong>Process Management</strong></td>
-              <td>PM2 (local dev)</td>
-              <td>Pre-installed in dev sandbox; daemon mode prevents process termination</td>
-            </tr>
-            <tr>
-              <td><strong>Production Hosting</strong></td>
-              <td>Render.com</td>
-              <td>Native Python support; free tier available; auto-deploys from GitHub; supports apt packages for TSK</td>
-            </tr>
-            <tr>
-              <td><strong>Version Control</strong></td>
-              <td>Git + GitHub</td>
-              <td>Industry standard; enables CI/CD with Render.com auto-deploy on push</td>
-            </tr>
-            <tr>
-              <td><strong>Environment Secrets</strong></td>
-              <td>python-dotenv + platform env vars</td>
-              <td>12-Factor App methodology; secrets never committed to git</td>
-            </tr>
-            <tr>
-              <td><strong>Database (optional)</strong></td>
-              <td>MongoDB Atlas (pymongo)</td>
-              <td>Persistent job storage across server restarts; Atlas free tier (512 MB)</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="feature-item">
+        <div class="fi-title">🔍 Global Search Bar</div>
+        <div class="fi-desc">Navbar search filters job cards and evidence list in real time using <code>input</code> events with <code>toLowerCase()</code> matching.</div>
       </div>
-
-      <div class="callout warning">
-        <span class="callout-icon">⚠️</span>
-        <div>
-          <strong>Cloudflare Pages — Not Used:</strong> The project was initially attempted on
-          Cloudflare Pages/Workers and Vercel. Both platforms only execute JavaScript (V8 engine)
-          and do <em>not</em> support Python at runtime. Since the forensic pipeline is fundamentally
-          Python-based (subprocess calls to Sleuth Kit, SQLite parsing, hashlib), a Python-native
-          host (Render.com) is the only viable solution. Cloudflare Pages could host the static
-          frontend if a separate API host is used.
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">💾 Jobs Management</div>
+        <div class="fi-desc">Previous analysis jobs are fetched from <code>/api/jobs</code>, displayed as cards with status badges, and can be re-opened or deleted.</div>
       </div>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 4 — CORE MODULES
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s4">
-      <div class="section-header">
-        <div class="section-num">4</div>
-        <h2>Core Module Documentation</h2>
+      <div class="feature-item">
+        <div class="fi-title">🔑 API Key Toggle</div>
+        <div class="fi-desc">Optional OpenAI API key field with show/hide toggle and secure handling — key is sent to the backend only for the duration of the analysis job.</div>
       </div>
-
-      <!-- 4.1 ForensicAnalyzer -->
-      <h3 id="s4-1">4.1 ForensicAnalyzer (<code>modules/analyzer.py</code>)</h3>
-      <p>The entry-point module for every investigation. Performs two critical forensic functions: evidence classification and cryptographic hashing.</p>
-
-      <div class="card">
-        <div class="card-title">Class: ForensicAnalyzer</div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Method</th><th>Returns</th><th>Description</th></tr></thead>
-            <tbody>
-              <tr><td><code>detect_evidence_type()</code></td><td><code>str</code></td><td>Inspects file extension first, then reads 512-byte header for magic bytes. Detects: <code>disk_image</code>, <code>e01</code>, <code>iso</code>, <code>logical_file</code>.</td></tr>
-              <tr><td><code>compute_hashes()</code></td><td><code>Dict</code></td><td>Streams file in 64 KB chunks. Returns MD5, SHA-1, SHA-256 hexdigests plus human-readable file size.</td></tr>
-              <tr><td><code>get_file_info()</code></td><td><code>Dict</code></td><td>Returns name, size, extension, and path from <code>os.stat()</code>.</td></tr>
-            </tbody>
-          </table>
-        </div>
+      <div class="feature-item">
+        <div class="fi-title">🔔 Toast Notifications</div>
+        <div class="fi-desc">CSS-animated toast messages appear for success, error, and info events with auto-dismiss after 4 seconds.</div>
       </div>
+    </div>
 
-      <h4>Magic Byte Detection Table</h4>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Format</th><th>Bytes (hex)</th><th>Signature</th></tr></thead>
-          <tbody>
-            <tr><td>E01 / EWF</td><td><code>45 56 46</code></td><td>ASCII "EVF"</td></tr>
-            <tr><td>ISO 9660</td><td><code>offset 1: 43 44 30 30 31</code></td><td>ASCII "CD001"</td></tr>
-            <tr><td>MBR Disk</td><td><code>offset 510: 55 AA</code></td><td>MBR Boot Signature</td></tr>
-            <tr><td>GPT Disk</td><td><code>offset 512: 45 46 49 20 50 41 52 54</code></td><td>ASCII "EFI PART"</td></tr>
-            <tr><td>VMDK</td><td><code>4B 44 4D 56</code></td><td>ASCII "KDMV"</td></tr>
-          </tbody>
-        </table>
+    <h3>Cloudflare Worker Edge Proxy (<code>_worker.js</code>)</h3>
+    <p>A Cloudflare Worker sits in front of the static site and routes traffic intelligently:</p>
+<pre><code>const BACKEND_URL = "https://forensic-platform.onrender.com";
+
+// Routes proxied to Render backend:
+if (path.startsWith("/api/") ||
+    path.startsWith("/reports/") ||
+    path.startsWith("/recovered/") ||
+    path.startsWith("/static/")) {
+  // Forward request, inject CORS headers
+}
+
+// All other requests → serve index.html (SPA routing)</code></pre>
+    <p>This means <strong>no CORS issues</strong> (same origin from browser's perspective) and the Render backend is shielded behind Cloudflare's network, gaining DDoS protection and edge caching.</p>
+  </div>
+
+  <!-- ── Deployment Stack ── -->
+  <div class="tech-card" id="s3-deployment">
+    <div class="tech-card-header">
+      <div class="tech-icon icon-gray">☁️</div>
+      <div class="tech-card-header-text">
+        <h3>Deployment Stack — Render + Cloudflare</h3>
+        <span class="version">Render.com (Python) · Cloudflare Pages · Wrangler · render.yaml</span>
       </div>
+    </div>
 
-      <!-- 4.2 DiskAnalyzer -->
-      <h3 id="s4-2">4.2 DiskAnalyzer (<code>modules/disk_analysis.py</code>)</h3>
-      <p>Orchestrates all Sleuth Kit CLI tool invocations. Provides resilient subprocess execution with timeouts and graceful degradation when TSK is not installed.</p>
+    <div class="why-box"><strong>Why Render + Cloudflare (split deployment)?</strong> Cloudflare Pages is globally edge-cached CDN but cannot run Python. Render.com runs Python with full OS access (needed for Sleuth Kit CLI tools). This split gives the best of both: blazing-fast static delivery and full-featured Python processing.</div>
 
-      <div class="card">
-        <div class="card-title">Class: DiskAnalyzer — Key Methods</div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Method</th><th>TSK Tool</th><th>Output</th></tr></thead>
-            <tbody>
-              <tr><td><code>run_mmls()</code></td><td><code>mmls</code></td><td>List of partition dicts: slot, start, end, length, description, byte offset</td></tr>
-              <tr><td><code>get_primary_offset()</code></td><td>—</td><td>Start sector of main data partition (skips metadata/unallocated)</td></tr>
-              <tr><td><code>run_fsstat(offset)</code></td><td><code>fsstat</code></td><td>Filesystem type, volume name, block size, last mount timestamp</td></tr>
-              <tr><td><code>run_fls(offset, deleted_only)</code></td><td><code>fls -r [-d]</code></td><td>List of file entries: inode, name, type, deleted flag</td></tr>
-              <tr><td><code>run_ils(offset)</code></td><td><code>ils</code></td><td>Inode listing: inode number, allocation status, link count</td></tr>
-              <tr><td><code>recover_files(output_dir, offset)</code></td><td><code>tsk_recover</code></td><td>List of recovered file paths in output_dir</td></tr>
-              <tr><td><code>run_full_disk_analysis()</code></td><td>All above</td><td>Consolidated dict with all results; caps at 5000 files, 2000 deleted, 1000 inodes</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+    <table>
+      <tr><th>Platform</th><th>What It Hosts</th><th>Why This Choice</th></tr>
+      <tr><td><strong>Render.com</strong></td><td>FastAPI backend + all forensic CLI tools</td><td>Free Python hosting, supports CLI tool installation, persistent storage, environment secrets management</td></tr>
+      <tr><td><strong>Cloudflare Pages</strong></td><td>Static frontend SPA + edge proxy worker</td><td>Free, globally distributed CDN, custom domain, zero cold-start, edge worker capability</td></tr>
+      <tr><td><strong>MongoDB Atlas</strong></td><td>All persistent data (evidence, analysis, search index)</td><td>Free M0 cluster, managed backups, global replica sets, Motor async driver support</td></tr>
+    </table>
 
-      <!-- 4.3 ArtifactExtractor -->
-      <h3 id="s4-3">4.3 ArtifactExtractor (<code>modules/artifact_extractor.py</code>)</h3>
-      <p>Scans the recovered file directory and extracts four categories of forensic artefacts. Operates entirely on recovered files — no additional tools required for baseline functionality.</p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Artifact Type</th><th>Method</th><th>Sources / Tools</th></tr></thead>
-          <tbody>
-            <tr>
-              <td><strong>Browser History</strong></td>
-              <td><code>extract_browser_history()</code></td>
-              <td>Detects SQLite files named <code>History</code> (Chrome/Edge) or <code>places.sqlite</code> (Firefox). Runs SQL JOINs on urls+visits / moz_places+moz_historyvisits. Converts Chrome timestamps (microseconds since 1601-01-01) to UTC.</td>
-            </tr>
-            <tr>
-              <td><strong>EXIF Metadata</strong></td>
-              <td><code>extract_metadata()</code></td>
-              <td>Calls <code>exiftool -json</code> on all image files. Fallback to <code>os.stat()</code> timestamps when ExifTool unavailable.</td>
-            </tr>
-            <tr>
-              <td><strong>Multimedia Files</strong></td>
-              <td><code>extract_multimedia()</code></td>
-              <td>Catalogues .jpg/.png/.gif/.bmp/.tiff/.webp and .mp4/.avi/.mov/.mkv/.wmv/.flv/.webm with size and relative path.</td>
-            </tr>
-            <tr>
-              <td><strong>Documents</strong></td>
-              <td><code>extract_documents()</code></td>
-              <td>Catalogues .pdf/.docx/.doc/.xlsx/.xls/.pptx/.txt/.csv/.rtf with document type classification.</td>
-            </tr>
-            <tr>
-              <td><strong>File Carving</strong></td>
-              <td><code>run_media_carving()</code></td>
-              <td>Tries PhotoRec first, falls back to Foremost. Runs against the raw evidence image, not recovered files.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- 4.4 TimelineBuilder -->
-      <h3 id="s4-4">4.4 TimelineBuilder (<code>modules/timeline_builder.py</code>)</h3>
-      <p>Generates a <strong>MAC-time timeline</strong> (Modified, Accessed, Changed) — the cornerstone of any temporal forensic investigation.</p>
-
-      <div class="card">
-        <div class="card-title">Timeline Construction Logic</div>
-        <pre><code><span class="cm">Method 1 — TSK pipeline (preferred):</span>
-fls -r -m / [image]  →  timeline.body  →  mactime -b timeline.body -d
-   ↓ Parse CSV output (date, activity, filename, size, inode)
-
-<span class="cm">Method 2 — Body file direct parse (mactime unavailable):</span>
-Parses fls -m body file format:
-  MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime
-  Converts Unix timestamps to UTC strings
-
-<span class="cm">Method 3 — Filesystem fallback (TSK unavailable):</span>
-os.walk(recovered_path)  →  os.stat(file)
-  → st_mtime / st_atime / st_ctime timestamps</code></pre>
-      </div>
-
-      <!-- 4.5 KeywordSearchEngine -->
-      <h3 id="s4-5">4.5 KeywordSearchEngine (<code>modules/keyword_search.py</code>)</h3>
-      <p>Provides five distinct search strategies, automatically selected based on the keyword pattern (email, URL, extension, or general text).</p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Strategy</th><th>Method</th><th>Coverage</th><th>Max Results</th></tr></thead>
-          <tbody>
-            <tr><td>Filename scan</td><td><code>search_filenames()</code></td><td>All recovered files</td><td>100</td></tr>
-            <tr><td>File content scan</td><td><code>search_file_content()</code></td><td>Text files ≤10 MB</td><td>200 per keyword</td></tr>
-            <tr><td>Browser history</td><td><code>search_browser_history()</code></td><td>URL + title strings</td><td>100</td></tr>
-            <tr><td>EXIF metadata</td><td><code>search_metadata()</code></td><td>All EXIF tag values</td><td>50</td></tr>
-            <tr><td>SQLite databases</td><td><code>search_sqlite_databases()</code></td><td>All tables, first 1000 rows each</td><td>50</td></tr>
-            <tr><td>Email extraction</td><td><code>search_emails()</code></td><td>Regex across all text files</td><td>100</td></tr>
-            <tr><td>URL extraction</td><td><code>search_urls()</code></td><td>Regex + browser history</td><td>200</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h4>Smart Keyword Routing</h4>
-      <pre><code><span class="kw">if</span> <span class="str">"@"</span> <span class="kw">in</span> kw <span class="kw">and</span> <span class="str">"."</span> <span class="kw">in</span> kw:
-    hits = search_emails(kw)           <span class="cm"># email pattern</span>
-<span class="kw">elif</span> kw.startswith(<span class="str">"."</span>) <span class="kw">and</span> len(kw) &lt;= <span class="num">6</span>:
-    hits = search_filenames(kw)        <span class="cm"># extension e.g. ".exe"</span>
-<span class="kw">elif</span> kw.startswith(<span class="str">"http"</span>) <span class="kw">or</span> kw.startswith(<span class="str">"www"</span>):
-    hits = search_urls(kw)             <span class="cm"># URL pattern</span>
-<span class="kw">else</span>:
-    hits = (search_filenames(kw) +     <span class="cm"># full general search</span>
-            search_file_content(kw) +
-            search_browser_history(kw) +
-            search_metadata(kw))</code></pre>
-
-      <!-- 4.6 AISummarizer -->
-      <h3 id="s4-6">4.6 AISummarizer (<code>modules/ai_summary.py</code>)</h3>
-      <p>Generates professional forensic investigation summaries using OpenAI's GPT-4o-mini. Implements two-level fallback to guarantee summary generation under all conditions.</p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Condition</th><th>Path</th><th>Output Quality</th></tr></thead>
-          <tbody>
-            <tr><td>OPENAI_API_KEY set + network available</td><td><code>_openai_summary()</code> via urllib</td><td>GPT-generated professional narrative</td></tr>
-            <tr><td>Key missing or API unreachable</td><td><code>_template_summary()</code></td><td>Structured Markdown tables + bullet lists</td></tr>
-            <tr><td>Any exception in pipeline</td><td><code>generate_local_summary()</code> in main.py</td><td>Basic fallback summary</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <!-- 4.7 ReportGenerator -->
-      <h3 id="s4-7">4.7 ReportGenerator (<code>modules/report_generator.py</code>)</h3>
-      <p>
-        The largest module at <strong>1,274 lines</strong>. Generates a fully self-contained interactive
-        HTML forensic report including embedded images (base64), responsive CSS, and interactive
-        JavaScript (search, lightbox, sidebar navigation).
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Report Section</th><th>Method</th><th>Content</th></tr></thead>
-          <tbody>
-            <tr><td>AI Summary</td><td><code>_build_html()</code></td><td>Markdown-rendered GPT or template summary</td></tr>
-            <tr><td>Evidence Info</td><td>inline</td><td>MD5, SHA-1, SHA-256 hashes; file name, type, size</td></tr>
-            <tr><td>Statistics Dashboard</td><td>inline</td><td>Total files, deleted, images, videos, documents counts</td></tr>
-            <tr><td>Disk Partitions</td><td><code>_build_partitions()</code></td><td>Slot, start sector, length, description from mmls</td></tr>
-            <tr><td>Filesystem Info</td><td><code>_build_fsstat()</code></td><td>Type, volume name, block size from fsstat</td></tr>
-            <tr><td>All Files</td><td><code>_build_file_table()</code></td><td>Filterable table of all recovered files</td></tr>
-            <tr><td>Deleted Files</td><td><code>_build_file_table(deleted=True)</code></td><td>Red-highlighted deleted file entries</td></tr>
-            <tr><td>Multimedia Preview</td><td><code>_build_multimedia()</code></td><td>Image grid (base64 thumbnails ≤2MB), video listing</td></tr>
-            <tr><td>Documents</td><td><code>_build_documents()</code></td><td>PDF/Word/Excel catalog with sizes</td></tr>
-            <tr><td>Browser History</td><td><code>_build_browser_history()</code></td><td>URL table with browser, title, visit time, count</td></tr>
-            <tr><td>EXIF Metadata</td><td><code>_build_metadata()</code></td><td>Camera make/model, GPS links to Google Maps</td></tr>
-            <tr><td>Forensic Timeline</td><td><code>_build_timeline()</code></td><td>MAC-time table, sortable by date</td></tr>
-            <tr><td>Keyword Search</td><td><code>_build_search_results()</code></td><td>Per-keyword match count + expandable hit list</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h4>Mobile Responsiveness (Report)</h4>
-      <ul>
-        <li>Hamburger button (≤900px) toggles off-canvas sidebar with blur overlay.</li>
-        <li>Tables use <code>overflow-x: auto</code> with <code>-webkit-overflow-scrolling: touch</code>.</li>
-        <li>Stats grid collapses from 4-column to 2-column at 768px, 1-column at 480px.</li>
-        <li>Lightbox expands to 98vw × 95vh on mobile.</li>
-        <li>Extra-small breakpoint at 380px for older Android devices.</li>
-      </ul>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 5 — PIPELINE
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s5">
-      <div class="section-header">
-        <div class="section-num">5</div>
-        <h2>Analysis Pipeline — Technical Detail</h2>
-      </div>
-
-      <p>
-        The <code>run_full_analysis()</code> coroutine in <code>main.py</code> is the orchestrator of
-        all eight pipeline stages. It is launched as a FastAPI <code>BackgroundTask</code> immediately
-        after the evidence upload is acknowledged, preventing HTTP timeout on large files.
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Step</th><th>Function</th><th>Progress %</th><th>Failure Mode</th></tr>
-          </thead>
-          <tbody>
-            <tr><td>1. Upload &amp; Job Init</td><td>FastAPI route handler</td><td>0%</td><td>HTTP 422 if no file provided</td></tr>
-            <tr><td>2. Evidence Detection</td><td><code>ForensicAnalyzer.detect_evidence_type()</code></td><td>10%</td><td>Falls back to <em>logical_file</em></td></tr>
-            <tr><td>3. Hash Computation</td><td><code>ForensicAnalyzer.compute_hashes()</code></td><td>15%</td><td>I/O error → job fails</td></tr>
-            <tr><td>4. Disk Analysis</td><td><code>DiskAnalyzer.run_full_disk_analysis()</code></td><td>30%</td><td>TSK missing → empty results, continues</td></tr>
-            <tr><td>5. File Recovery</td><td><code>DiskAnalyzer.recover_files()</code></td><td>45%</td><td>tsk_recover missing → logical copy</td></tr>
-            <tr><td>6. Artifact Extraction</td><td><code>ArtifactExtractor.extract_all()</code></td><td>60%</td><td>SQLite errors caught per-file</td></tr>
-            <tr><td>7. Timeline</td><td><code>TimelineBuilder.build_timeline()</code></td><td>70%</td><td>Falls back to filesystem timeline</td></tr>
-            <tr><td>8. Keyword Search</td><td><code>KeywordSearchEngine.search_all()</code></td><td>80%</td><td>Empty results, continues</td></tr>
-            <tr><td>9. AI Summary</td><td><code>AISummarizer.generate_summary()</code></td><td>88%</td><td>Falls back to template summary</td></tr>
-            <tr><td>10. Report Generation</td><td><code>ReportGenerator.generate()</code></td><td>100%</td><td>I/O error → job fails</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="callout success">
-        <span class="callout-icon">✅</span>
-        <div>
-          <strong>Resilience Design:</strong> Every stage is wrapped in try/except. If a non-critical
-          stage fails (TSK unavailable, ExifTool missing, OpenAI unreachable), the pipeline logs a
-          warning and continues. Only I/O errors on the evidence file or report directory cause the
-          job to transition to <em>failed</em> status. This ensures the platform is usable even in
-          environments where forensic tools are partially installed.
-        </div>
-      </div>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 6 — API REFERENCE
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s6">
-      <div class="section-header">
-        <div class="section-num">6</div>
-        <h2>REST API Reference</h2>
-      </div>
-
-      <p>All endpoints return <code>application/json</code> unless noted. Base URL: <code>https://forensic-platform.onrender.com</code></p>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Method</th><th>Endpoint</th><th>Description</th><th>Auth Required</th></tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/</code></td>
-              <td>Render the main investigation UI (Jinja2 HTML)</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-post">POST</span></td>
-              <td><code>/api/investigate</code></td>
-              <td>Upload evidence file (<code>multipart/form-data</code>). Fields: <code>evidence</code> (file), <code>keywords</code> (comma-separated string). Returns <code>{job_id, status}</code>.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/api/status/{job_id}</code></td>
-              <td>Poll job progress. Returns <code>{status, progress, log[], report_url, hashes, recovered_count, evidence_type}</code>. Poll every 1.5 s until <code>status == "completed"</code>.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/api/jobs</code></td>
-              <td>List all investigation jobs (newest first). Returns array of job summaries.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/api/report/{job_id}</code></td>
-              <td>Full report JSON (all findings, timeline, search results). Only available when <code>status == "completed"</code>.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/api/report-file/{job_id}</code></td>
-              <td>Serve the interactive HTML report directly. Returns <code>text/html</code>.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-post">POST</span></td>
-              <td><code>/api/search/{job_id}</code></td>
-              <td>Run additional keyword search on a completed job. Body: <code>{"keyword": "bitcoin"}</code>.</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-delete">DELETE</span></td>
-              <td><code>/api/jobs/{job_id}</code></td>
-              <td>Delete job from store and remove all associated files (evidence, recovered, report).</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-post">POST</span></td>
-              <td><code>/api/config/openai</code></td>
-              <td>Set OpenAI API key for current session. Body: <code>{"key": "sk-..."}</code>. Key stored in <code>os.environ</code> (in-memory only).</td>
-              <td>No</td>
-            </tr>
-            <tr>
-              <td><span class="method method-get">GET</span></td>
-              <td><code>/api/health</code></td>
-              <td>System health check. Returns server status + availability of each forensic tool (mmls, fsstat, fls, ils, tsk_recover, exiftool, photorec, foremost).</td>
-              <td>No</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h4>Example: Start Investigation</h4>
-      <pre><code>curl -X POST https://forensic-platform.onrender.com/api/investigate \
-  -F "evidence=@suspect_disk.dd" \
-  -F "keywords=bitcoin,password,gmail,secret"
-
-<span class="cm"># Response:</span>
-{<span class="str">"job_id"</span>: <span class="str">"a3f1c2b8"</span>, <span class="str">"status"</span>: <span class="str">"queued"</span>, <span class="str">"message"</span>: <span class="str">"Investigation started"</span>}</code></pre>
-
-      <h4>Example: Poll Status</h4>
-      <pre><code>curl https://forensic-platform.onrender.com/api/status/a3f1c2b8
-
-{
-  <span class="str">"job_id"</span>: <span class="str">"a3f1c2b8"</span>,
-  <span class="str">"status"</span>: <span class="str">"running"</span>,
-  <span class="str">"progress"</span>: <span class="num">60</span>,
-  <span class="str">"evidence_type"</span>: <span class="str">"disk_image"</span>,
-  <span class="str">"log"</span>: [<span class="str">"[10:23:01] Step 4: Extracting artifacts..."</span>],
-  <span class="str">"hashes"</span>: {<span class="str">"sha256"</span>: <span class="str">"abc123..."</span>, <span class="str">"md5"</span>: <span class="str">"def456..."</span>},
-  <span class="str">"recovered_count"</span>: <span class="num">1247</span>
-}</code></pre>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 7 — SECURITY
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s7">
-      <div class="section-header">
-        <div class="section-num">7</div>
-        <h2>Security &amp; Forensic Integrity</h2>
-      </div>
-
-      <h3>7.1 Evidence Integrity</h3>
-      <p>
-        Forensic investigations must demonstrate that evidence has not been altered between acquisition
-        and analysis. The platform implements the following integrity measures:
-      </p>
-      <ul>
-        <li><strong>Triple hashing</strong> — MD5, SHA-1, and SHA-256 computed immediately upon upload before any analysis begins. These values are embedded in every report and returned by <code>/api/status</code>.</li>
-        <li><strong>Read-only analysis</strong> — TSK tools operate on the original evidence file without modification. Only <code>tsk_recover</code> writes to a separate output directory.</li>
-        <li><strong>Immutable upload path</strong> — uploaded files are saved with a UUID prefix and never overwritten; deletion is only possible via the explicit DELETE API.</li>
-      </ul>
-
-      <h3>7.2 API Key Security</h3>
-      <ul>
-        <li>OpenAI API key is stored only in <code>os.environ</code> (process memory); never written to disk.</li>
-        <li>MongoDB URI and other secrets are injected via platform environment variables (Render.com dashboard), never committed to the git repository.</li>
-        <li>The <code>.env</code> file is listed in <code>.gitignore</code>; only <code>.env.example</code> is committed.</li>
-      </ul>
-
-      <h3>7.3 CORS &amp; Input Validation</h3>
-      <ul>
-        <li><strong>CORS</strong> — <code>allow_origins=["*"]</code> is used for the current prototype. Production deployment should restrict origins to known investigator domains.</li>
-        <li><strong>File sanitisation</strong> — <code>evidence.filename.replace(" ", "_")</code> prevents path traversal via filename injection.</li>
-        <li><strong>Job isolation</strong> — each job gets a unique UUID directory under <code>uploads/</code>, <code>recovered/</code>, and <code>reports/</code>; cross-job file access is structurally prevented.</li>
-      </ul>
-
-      <h3>7.4 Production Hardening (Recommended)</h3>
-      <div class="callout warning">
-        <span class="callout-icon">⚠️</span>
-        <div>
-          The following hardening steps are recommended before using this platform in a live
-          investigative environment:
-          <ul style="margin: 0.6rem 0 0; padding-left: 1.2rem;">
-            <li>Add JWT/OAuth2 authentication middleware to all API routes.</li>
-            <li>Implement rate limiting (e.g., <code>slowapi</code>) to prevent abuse.</li>
-            <li>Switch in-memory job store to Redis or MongoDB for persistence and multi-instance support.</li>
-            <li>Enable HTTPS-only (enforced by Render.com and most cloud hosts).</li>
-            <li>Log all investigation activities to an append-only audit log with timestamps.</li>
-            <li>Restrict CORS to investigator dashboard domain only.</li>
-          </ul>
-        </div>
-      </div>
-    </section>
-
-    <!-- ════════════════════════════════════════════
-         SECTION 8 — DEPLOYMENT
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s8">
-      <div class="section-header">
-        <div class="section-num">8</div>
-        <h2>Deployment Guide</h2>
-      </div>
-
-      <h3>8.1 Local Development (Windows / Linux / macOS)</h3>
-      <pre><code><span class="cm"># 1. Clone the repository</span>
-git clone https://github.com/ayahmajali/forensic-platform.git
-cd forensic-platform/backend
-
-<span class="cm"># 2. Create virtual environment</span>
-python -m venv venv
-venv\Scripts\activate          <span class="cm"># Windows</span>
-source venv/bin/activate       <span class="cm"># Linux/macOS</span>
-
-<span class="cm"># 3. Install Python dependencies</span>
-pip install -r requirements.txt
-
-<span class="cm"># 4. Install Sleuth Kit (Windows)</span>
-<span class="cm"># Download installer from: https://www.sleuthkit.org/sleuthkit/download.php</span>
-<span class="cm"># Add C:\sleuthkit\bin to PATH</span>
-
-<span class="cm"># Install Sleuth Kit (Ubuntu/Debian)</span>
-sudo apt-get install -y sleuthkit exiftool libimage-exiftool-perl
-
-<span class="cm"># 5. Configure environment</span>
-cp .env.example .env
-<span class="cm"># Edit .env: add OPENAI_API_KEY=sk-... (optional)</span>
-
-<span class="cm"># 6. Start the server</span>
-python start.py
-<span class="cm"># Open http://localhost:8000</span></code></pre>
-
-      <h3>8.2 Render.com (Production)</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Setting</th><th>Value</th></tr></thead>
-          <tbody>
-            <tr><td>Service Type</td><td>Web Service</td></tr>
-            <tr><td>Repository</td><td>ayahmajali/forensic-platform</td></tr>
-            <tr><td>Root Directory</td><td><code>backend</code></td></tr>
-            <tr><td>Build Command</td><td><code>pip install -r requirements.txt</code></td></tr>
-            <tr><td>Start Command</td><td><code>uvicorn main:app --host 0.0.0.0 --port $PORT</code></td></tr>
-            <tr><td>Python Version</td><td>3.11 (declared in runtime.txt)</td></tr>
-            <tr><td>Environment Variables</td><td><code>OPENAI_API_KEY</code>, <code>MONGODB_URI</code></td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h3>8.3 Environment Variables</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Variable</th><th>Required</th><th>Description</th></tr></thead>
-          <tbody>
-            <tr><td><code>OPENAI_API_KEY</code></td><td>Optional</td><td>Enables GPT-4o-mini AI summaries. Without this, template summaries are used.</td></tr>
-            <tr><td><code>MONGODB_URI</code></td><td>Optional</td><td>MongoDB Atlas connection string for persistent job storage across restarts.</td></tr>
-            <tr><td><code>PORT</code></td><td>Auto</td><td>Set by Render.com automatically. Default 8000 for local dev.</td></tr>
-            <tr><td><code>VERCEL</code></td><td>Legacy</td><td>Set to <code>1</code> on Vercel (now deprecated — not used on Render).</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <h3>8.4 render.yaml (Infrastructure as Code)</h3>
-      <pre><code>services:
+    <h3>Infrastructure as Code (render.yaml)</h3>
+<pre><code>services:
   - type: web
     name: forensic-platform
-    env: python
+    runtime: python
     region: oregon
     plan: free
-    rootDir: backend
-    buildCommand: <span class="str">"pip install -r requirements.txt"</span>
-    startCommand: <span class="str">"uvicorn main:app --host 0.0.0.0 --port $PORT"</span>
+    rootDir: backend              # key: run from /backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
-        value: <span class="str">"3.11.0"</span></code></pre>
-    </section>
+        value: 3.11.0
+      - key: OPENAI_API_KEY    # Set as Render secret
+        sync: false
+      - key: MONGODB_URI       # Set as Render secret
+        sync: false</code></pre>
 
-    <!-- ════════════════════════════════════════════
-         SECTION 9 — COMPARISON
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s9">
-      <div class="section-header">
-        <div class="section-num">9</div>
-        <h2>Comparative Analysis &amp; Design Justification</h2>
-      </div>
+    <h3>Supporting Python Packages</h3>
+    <table>
+      <tr><th>Package</th><th>Version</th><th>Purpose in This Project</th></tr>
+      <tr><td><code>uvicorn[standard]</code></td><td>≥ 0.27</td><td>ASGI server that runs FastAPI in production (with libuv event loop for high concurrency)</td></tr>
+      <tr><td><code>python-multipart</code></td><td>≥ 0.0.9</td><td>Required by FastAPI for parsing <code>multipart/form-data</code> file uploads</td></tr>
+      <tr><td><code>aiofiles</code></td><td>≥ 23.2</td><td>Async file I/O — used for writing body files and reading large text files without blocking</td></tr>
+      <tr><td><code>Jinja2</code></td><td>≥ 3.1</td><td>Templating engine — available for HTML template rendering (used in report HTML assembly)</td></tr>
+      <tr><td><code>httpx</code></td><td>≥ 0.26</td><td>Async HTTP client — used for health checks and potential webhook callbacks</td></tr>
+      <tr><td><code>openai</code></td><td>≥ 1.0</td><td>Official OpenAI Python SDK (installed but ai_summary uses urllib directly for lighter imports)</td></tr>
+      <tr><td><code>python-dotenv</code></td><td>≥ 1.0</td><td>Loads <code>.env</code> file in local development; reads environment variables for all config values</td></tr>
+      <tr><td><code>pymongo</code></td><td>≥ 4.6</td><td>Motor's dependency — provides the synchronous MongoDB client core that Motor wraps asynchronously</td></tr>
+    </table>
+  </div>
+</section>
 
-      <h3>9.1 Platform Comparison vs. Existing Tools</h3>
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 4 — MODULE REFERENCE
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s4">
+  <div class="section-header">
+    <div class="section-num">4</div>
+    <h2>Core Module Reference</h2>
+  </div>
+  <p>All forensic logic lives in <code>backend/modules/</code>. Each file contains a single focused class. This section documents every class, its constructor arguments, and its public methods.</p>
 
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Feature</th>
-              <th>This Platform</th>
-              <th>Autopsy</th>
-              <th>FTK</th>
-              <th>Volatility</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>Browser-based access</td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Open source</td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="cross">✗ Paid</span></td><td><span class="check">✔</span></td></tr>
-            <tr><td>Disk image analysis (TSK)</td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="cross">✗ Memory</span></td></tr>
-            <tr><td>AI-generated summary</td><td><span class="check">✔ GPT-4o-mini</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>REST API</td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Mobile responsive</td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Cloud deployable</td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Browser history extraction</td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>No installation needed</td><td><span class="check">✔</span></td><td><span class="cross">✗ 4 GB+</span></td><td><span class="cross">✗ ~5 GB</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Interactive HTML report</td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Timeline (MAC-time)</td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="check">✔</span></td><td><span class="cross">✗</span></td></tr>
-            <tr><td>Multi-user / concurrent</td><td><span class="check">✔ via API</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td><td><span class="cross">✗</span></td></tr>
-          </tbody>
-        </table>
-      </div>
+  <!-- analyzer.py -->
+  <div class="module-card" id="s4-analyzer">
+    <div class="module-header">
+      <span class="badge badge-blue">modules/</span>
+      <h4>analyzer.py — <code>ForensicAnalyzer</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Detect the type of evidence file from its extension and magic bytes, compute cryptographic hashes, and return basic file metadata.</p>
+      <p><strong>Constructor:</strong> <code>ForensicAnalyzer(evidence_path: str)</code> — raises <code>FileNotFoundError</code> if path doesn't exist.</p>
+      <ul class="method-list">
+        <li><span class="method-name">detect_type()</span><span class="method-desc">Checks extension first (e01 → E01, iso → ISO, dd/raw/img → disk_image), then falls back to magic bytes: <code>EVF</code> for E01, <code>CD001</code> at offset 1 for ISO, <code>0x55AA</code> at bytes 510–511 for MBR. Returns a string literal.</span></li>
+        <li><span class="method-name">compute_hashes()</span><span class="method-desc">Reads file in 64 KB chunks computing MD5, SHA-1, and SHA-256 simultaneously. Returns dict with all three digests plus file size (bytes and human-readable).</span></li>
+        <li><span class="method-name">file_info()</span><span class="method-desc">Returns dict with name, size, size_human, extension, and full path. Uses <code>os.stat()</code>.</span></li>
+        <li><span class="method-name">_human_size(n)</span><span class="method-desc">Static helper. Converts byte count to B/KB/MB/GB/TB string.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <h3>9.2 Technology Decision Log</h3>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Decision</th><th>Chosen</th><th>Considered</th><th>Reason</th></tr></thead>
-          <tbody>
-            <tr><td>Backend language</td><td><strong>Python 3.11</strong></td><td>Node.js, Go, Rust</td><td>Richest forensic tooling ecosystem; subprocess to TSK; hashlib, sqlite3 stdlib</td></tr>
-            <tr><td>Web framework</td><td><strong>FastAPI</strong></td><td>Flask, Django, aiohttp</td><td>Native async; BackgroundTasks; auto OpenAPI; highest throughput</td></tr>
-            <tr><td>Disk analysis</td><td><strong>Sleuth Kit CLI</strong></td><td>pytsk3, dfvfs, libewf</td><td>Industry standard; court-accepted; broadest filesystem support</td></tr>
-            <tr><td>Metadata extraction</td><td><strong>ExifTool CLI</strong></td><td>Pillow, exifread, piexif</td><td>Supports 22,000+ tags; GPS, serial numbers; all file formats</td></tr>
-            <tr><td>AI model</td><td><strong>GPT-4o-mini</strong></td><td>GPT-4o, Claude, Llama3</td><td>Best cost/performance ratio; strong instruction following; fast response</td></tr>
-            <tr><td>Frontend</td><td><strong>Vanilla JS + Tailwind CDN</strong></td><td>React, Svelte, SolidJS</td><td>No build step; works with Python-only hosting; zero JS bundle size</td></tr>
-            <tr><td>Hosting</td><td><strong>Render.com</strong></td><td>Vercel, Cloudflare, AWS</td><td>Native Python support; free tier; auto-deploy from GitHub; supports apt packages</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+  <!-- disk_analysis.py -->
+  <div class="module-card" id="s4-disk">
+    <div class="module-header">
+      <span class="badge badge-orange">modules/</span>
+      <h4>disk_analysis.py — <code>DiskAnalyzer</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Wrap The Sleuth Kit CLI tools to perform disk image analysis. Auto-detects whether TSK is installed and gracefully degrades.</p>
+      <p><strong>Constructor:</strong> <code>DiskAnalyzer(image_path: str)</code></p>
+      <ul class="method-list">
+        <li><span class="method-name">run_mmls()</span><span class="method-desc">Executes <code>mmls</code>. Parses lines into dicts: {slot, start, end, length, description, offset}. Returns {raw, partitions[], count}.</span></li>
+        <li><span class="method-name">get_primary_offset(partitions)</span><span class="method-desc">Filters out unallocated/extended/meta partitions and returns the start sector of the most likely primary partition.</span></li>
+        <li><span class="method-name">run_fsstat(offset)</span><span class="method-desc">Executes <code>fsstat -o {offset}</code>. Parses fs_type, volume_name, last_mount, block_size, block_count from output text.</span></li>
+        <li><span class="method-name">run_fls(offset, deleted_only)</span><span class="method-desc">Executes <code>fls -r [-d] [-o offset]</code>. Calls <code>_parse_fls_line()</code> for each line. Returns list of {type, inode, name, deleted, raw} dicts.</span></li>
+        <li><span class="method-name">run_ils(offset)</span><span class="method-desc">Executes <code>ils</code>. Parses pipe-delimited output into {inode, status, links, raw} dicts.</span></li>
+        <li><span class="method-name">recover_files(output_dir, offset)</span><span class="method-desc">Executes <code>tsk_recover [-o offset] image output_dir</code>. Walks output_dir afterward and returns list of recovered file paths.</span></li>
+        <li><span class="method-name">run_full_disk_analysis()</span><span class="method-desc">Orchestrates the entire pipeline: mmls → primary offset → fsstat → fls (all) → fls (deleted) → ils. Returns consolidated dict. Caps: 5,000 files, 2,000 deleted, 1,000 inodes.</span></li>
+      </ul>
+    </div>
+  </div>
 
-    <!-- ════════════════════════════════════════════
-         SECTION 10 — LIMITATIONS
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s10">
-      <div class="section-header">
-        <div class="section-num">10</div>
-        <h2>Limitations &amp; Future Work</h2>
-      </div>
+  <!-- artifact_extractor.py -->
+  <div class="module-card" id="s4-artifact">
+    <div class="module-header">
+      <span class="badge badge-green">modules/</span>
+      <h4>artifact_extractor.py — <code>ArtifactExtractor</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Walk the recovered files directory and extract browser history, EXIF metadata, multimedia catalog, and document catalog. Optionally carve media from the original evidence image.</p>
+      <p><strong>Constructor:</strong> <code>ArtifactExtractor(recovered_path, evidence_path="")</code>. Auto-detects exiftool, photorec, foremost availability via <code>shutil.which()</code>.</p>
+      <ul class="method-list">
+        <li><span class="method-name">extract_browser_history()</span><span class="method-desc">Walks recovered dir. Files named <code>History</code> (SQLite magic) → Chrome. Files named <code>places.sqlite</code> → Firefox. Edge History also detected. Returns list of {browser, url, title, visit_count, visit_time, source}. Capped at 500.</span></li>
+        <li><span class="method-name">extract_metadata()</span><span class="method-desc">Finds all image files (.jpg/.png/.gif/.bmp/.tiff/.webp), calls exiftool -json on each. Falls back to os.stat() timestamps. Returns list of metadata dicts. Capped at 200.</span></li>
+        <li><span class="method-name">extract_multimedia()</span><span class="method-desc">Catalogs all image and video files: {type, filename, path, relative_path, size, extension}. Capped at 300.</span></li>
+        <li><span class="method-name">extract_documents()</span><span class="method-desc">Catalogs PDF, Word, Excel, PowerPoint, TXT, CSV, RTF files with doc_type classification. Capped at 300.</span></li>
+        <li><span class="method-name">run_media_carving(output_dir)</span><span class="method-desc">Tries photorec first, then foremost. Returns {status, tool, carved_count, output_dir}.</span></li>
+        <li><span class="method-name">extract_all()</span><span class="method-desc">Calls all methods above and returns consolidated dict {browser_history, metadata, multimedia, documents, carving}.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <h3>10.1 Current Limitations</h3>
+  <!-- timeline_builder.py -->
+  <div class="module-card" id="s4-timeline">
+    <div class="module-header">
+      <span class="badge badge-purple">modules/</span>
+      <h4>timeline_builder.py — <code>TimelineBuilder</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Build a chronological forensic MAC-time (Modified/Accessed/Changed) timeline of file activity. Uses TSK tools when available, filesystem stats as fallback.</p>
+      <p><strong>Constructor:</strong> <code>TimelineBuilder(image_path, recovered_path)</code>. Checks for <code>fls</code> and <code>mactime</code> availability.</p>
+      <ul class="method-list">
+        <li><span class="method-name">build_tsk_timeline(offset)</span><span class="method-desc">Runs <code>fls -r -m / -o offset image</code> to produce body file. If mactime is present, runs <code>mactime -b body -d</code> and parses CSV. Otherwise parses the body file directly. Returns up to 2,000 events.</span></li>
+        <li><span class="method-name">_parse_mactime_output(output)</span><span class="method-desc">Parses mactime CSV: date, size, activity (M/A/C/B), permissions, inode, filename. Source: "mactime".</span></li>
+        <li><span class="method-name">_parse_body_file(content)</span><span class="method-desc">Parses fls body format directly: MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime. Converts Unix timestamps via _ts_to_date(). Source: "fls-body".</span></li>
+        <li><span class="method-name">build_filesystem_timeline()</span><span class="method-desc">Fallback: walks recovered directory, uses os.stat() for mtime/atime/ctime. Source: "filesystem".</span></li>
+        <li><span class="method-name">build_timeline(offset)</span><span class="method-desc">Master method. Uses TSK if tools exist and image is a real file, otherwise falls back to filesystem timeline.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Limitation</th><th>Impact</th><th>Mitigation in Current Version</th></tr></thead>
-          <tbody>
-            <tr>
-              <td>In-memory job store</td>
-              <td>All jobs lost on server restart</td>
-              <td>MongoDB integration available via <code>MONGODB_URI</code></td>
-            </tr>
-            <tr>
-              <td>Render.com free tier sleeps after 15 min inactivity</td>
-              <td>~30s cold start delay</td>
-              <td>Upgrade to paid tier ($7/month); add keep-alive ping</td>
-            </tr>
-            <tr>
-              <td>No authentication</td>
-              <td>Any user can view all jobs</td>
-              <td>Add JWT middleware before production use</td>
-            </tr>
-            <tr>
-              <td>CORS allows all origins</td>
-              <td>Cross-site request risk</td>
-              <td>Restrict to investigator dashboard domain</td>
-            </tr>
-            <tr>
-              <td>TSK unavailable on Render free tier</td>
-              <td>Disk image analysis disabled</td>
-              <td>Render allows custom apt packages; add build script</td>
-            </tr>
-            <tr>
-              <td>No file size limit</td>
-              <td>Multi-GB uploads could exhaust disk</td>
-              <td>Add <code>Content-Length</code> check in upload handler</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+  <!-- keyword_search.py -->
+  <div class="module-card" id="s4-keyword">
+    <div class="module-header">
+      <span class="badge badge-teal">modules/</span>
+      <h4>keyword_search.py — <code>KeywordSearchEngine</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Multi-source keyword search spanning the entire recovered evidence corpus. Each keyword can target different data sources based on its pattern.</p>
+      <p><strong>Constructor:</strong> <code>KeywordSearchEngine(recovered_path, artifacts)</code> where <code>artifacts</code> is the output of <code>ArtifactExtractor.extract_all()</code>.</p>
+      <ul class="method-list">
+        <li><span class="method-name">search_filenames(keyword)</span><span class="method-desc">Walks recovered dir, matches keyword (case-insensitive) against each filename. Returns up to 100 hits with {match_type:"filename", file, context}.</span></li>
+        <li><span class="method-name">search_file_content(keyword)</span><span class="method-desc">Opens all text-format files (≤10 MB), reads line by line, returns matching lines with line number and 200-char context. Up to 200 hits.</span></li>
+        <li><span class="method-name">search_browser_history(keyword)</span><span class="method-desc">Searches URL and title fields in the artifacts browser_history list. Returns {match_type:"browser_history", browser, url, title, visit_time}.</span></li>
+        <li><span class="method-name">search_metadata(keyword)</span><span class="method-desc">Searches all key-value pairs in the EXIF raw dict of each metadata entry. Returns {match_type:"metadata", file, context:"key: value"}.</span></li>
+        <li><span class="method-name">search_sqlite_databases(keyword)</span><span class="method-desc">Opens every SQLite file found in recovered dir, reads ≤20 tables × 1,000 rows, checks every string cell. Up to 50 hits.</span></li>
+        <li><span class="method-name">search_emails(keyword)</span><span class="method-desc">Regex email detection (<code>\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b</code>) across all text files. Up to 100 unique emails.</span></li>
+        <li><span class="method-name">search_urls(keyword)</span><span class="method-desc">Regex URL extraction (<code>https?://...</code> or <code>www....</code>) from text files. Up to 200 unique URLs.</span></li>
+        <li><span class="method-name">search_all(keywords[])</span><span class="method-desc">Dispatches to the right search methods based on keyword pattern: email address → search_emails; starts with <code>.</code> → filenames only; URL → search_urls; general → all sources. Deduplicates results.</span></li>
+        <li><span class="method-name">search_single(keyword)</span><span class="method-desc">Convenience wrapper around search_all for a single keyword. Returns list directly.</span></li>
+      </ul>
 
-      <h3>10.2 Planned Future Features</h3>
-      <div class="feature-grid">
-        <div class="feature-card">
-          <div class="icon">🔐</div>
-          <h4>Authentication System</h4>
-          <p>JWT-based login with role-based access control (Admin, Investigator, Read-only) and full audit logging.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">💾</div>
-          <h4>Persistent Storage</h4>
-          <p>MongoDB Atlas integration for job persistence, Redis for real-time progress via WebSocket instead of polling.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">🧠</div>
-          <h4>Memory Forensics</h4>
-          <p>Volatility3 integration for RAM dump analysis — process lists, network connections, registry hives.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">📊</div>
-          <h4>Case Management</h4>
-          <p>Link multiple evidence items to a single case, generate a consolidated case report, and export in DFXML or TSK Body format.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">🌐</div>
-          <h4>Network Artifact Analysis</h4>
-          <p>Parse PCAP files using PyShark/Scapy; extract DNS queries, HTTP sessions, and credentials from network captures.</p>
-        </div>
-        <div class="feature-card">
-          <div class="icon">⛓️</div>
-          <h4>Blockchain Audit Trail</h4>
-          <p>Write evidence hash + timestamp to a public blockchain (Ethereum/Polygon) for tamper-proof chain-of-custody proof.</p>
-        </div>
-      </div>
-    </section>
+      <h3>Smart Keyword Routing</h3>
+<pre><code>if "@" in kw and "." in kw:     → search_emails()      # e.g., user@gmail.com
+elif kw.startswith("."):         → search_filenames()   # e.g., .exe, .docx
+elif kw.startswith("http"):      → search_urls()        # e.g., https://...
+else:                            → all sources          # e.g., "password", "bitcoin"</code></pre>
+    </div>
+  </div>
 
-    <!-- ════════════════════════════════════════════
-         SECTION 11 — CONCLUSION
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s11">
-      <div class="section-header">
-        <div class="section-num">11</div>
-        <h2>Conclusion</h2>
-      </div>
+  <!-- ai_summary.py -->
+  <div class="module-card" id="s4-ai">
+    <div class="module-header">
+      <span class="badge badge-yellow">modules/</span>
+      <h4>ai_summary.py — <code>AISummarizer</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Generate a professional forensic investigation summary — either via OpenAI GPT or a structured template fallback.</p>
+      <p><strong>Constructor:</strong> <code>AISummarizer()</code>. Reads <code>OPENAI_API_KEY</code> and <code>OPENAI_MODEL</code> from environment. Sets <code>self.available = bool(api_key)</code>.</p>
+      <ul class="method-list">
+        <li><span class="method-name">generate_summary(analysis_data)</span><span class="method-desc">Entry point. Calls _openai_summary() if available, falls back to _template_summary() on error or if no API key.</span></li>
+        <li><span class="method-name">_openai_summary(data)</span><span class="method-desc">Builds structured prompt from analysis_data, POSTs to OpenAI chat/completions, returns assistant's content string (Markdown).</span></li>
+        <li><span class="method-name">_template_summary(data)</span><span class="method-desc">Constructs a formatted Markdown report locally: Executive Summary, Evidence Integrity table, Recovered Files table, Browser Activity, Metadata Findings, Keyword Findings, Recommendations.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <p>
-        This graduate project demonstrates that professional-grade digital forensic investigation
-        capabilities can be delivered as a web application, making forensic analysis accessible to
-        investigators without specialist hardware or local tool installation.
-      </p>
+  <!-- report_generator.py -->
+  <div class="module-card" id="s4-report">
+    <div class="module-header">
+      <span class="badge badge-red">modules/</span>
+      <h4>report_generator.py — <code>ReportGenerator</code></h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Generate a self-contained, interactive HTML forensic report — no external dependencies. The report embeds images as Base64 data URIs and includes all JavaScript inline.</p>
+      <p><strong>Constructor:</strong> <code>ReportGenerator(job_id, evidence_name, evidence_type, hashes, disk_results, artifacts, timeline, search_results, ai_summary, recovered_path, output_dir)</code></p>
+      <ul class="method-list">
+        <li><span class="method-name">generate()</span><span class="method-desc">Creates output directory, calls _build_html(), writes report.html. Returns path to the file.</span></li>
+        <li><span class="method-name">_build_html()</span><span class="method-desc">Assembles the complete HTML document by calling all section builders, _get_css(), and _get_js().</span></li>
+        <li><span class="method-name">_get_css()</span><span class="method-desc">Returns 500+ lines of CSS: sticky left sidebar nav, top header bar, card-based content panels, responsive grid, media gallery, image lightbox, filterable tables.</span></li>
+        <li><span class="method-name">_get_js()</span><span class="method-desc">Returns 300+ lines of JS: sidebar active highlighting, smooth scroll, table row filtering, lightbox for images and videos, global search over filenames and browser history, mobile sidebar toggle.</span></li>
+        <li><span class="method-name">_get_image_b64(path)</span><span class="method-desc">Reads image file, base64-encodes it (if ≤ 2 MB), returns data: URI string. Images larger than 2 MB get a placeholder.</span></li>
+        <li><span class="method-name">_md_to_html(text)</span><span class="method-desc">Lightweight Markdown to HTML converter: ## headings, **bold**, * bullets, --- horizontal rules, | tables.</span></li>
+        <li><span class="method-name">Section builders</span><span class="method-desc">_build_sidebar(), _build_partitions(), _build_filesystem_info(), _build_all_files(), _build_deleted_files(), _build_multimedia(), _build_documents(), _build_browser_history(), _build_metadata(), _build_timeline(), _build_search_results() — each produces an HTML string for its section.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <p>
-        The platform successfully integrates <strong>seven distinct technology domains</strong>:
-        web framework engineering (FastAPI), disk forensics (The Sleuth Kit), metadata analysis
-        (ExifTool), browser artifact parsing (SQLite3), temporal analysis (MAC-time timeline),
-        multi-strategy keyword search, and AI-augmented reporting (OpenAI GPT-4o-mini).
-      </p>
+  <!-- database.py -->
+  <div class="module-card" id="s4-db">
+    <div class="module-header">
+      <span class="badge badge-green">backend/</span>
+      <h4>database.py — <code>Database</code> (Motor singleton)</h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Manages the async MongoDB connection pool. Single point of truth for all DB access across routes.</p>
+      <ul class="method-list">
+        <li><span class="method-name">connect()</span><span class="method-desc">Opens Motor client with maxPoolSize=20, serverSelectionTimeoutMS=5000. Pings admin to verify. Creates all performance indexes.</span></li>
+        <li><span class="method-name">disconnect()</span><span class="method-desc">Closes the Motor client cleanly on application shutdown.</span></li>
+        <li><span class="method-name">_create_indexes()</span><span class="method-desc">Creates: <code>upload_date</code>, <code>status</code> on evidence; unique <code>evidence_id</code> on analysis_results; compound text index on search_index.</span></li>
+        <li><span class="method-name">evidence(), analysis(), search_index()</span><span class="method-desc">Collection accessor classmethods — return the Motor collection object for direct async queries.</span></li>
+      </ul>
+    </div>
+  </div>
 
-      <p>
-        All eight pipeline stages operate with graceful degradation — the system produces useful
-        results even when individual tools are unavailable. The mobile-responsive interface,
-        comprehensive REST API, and self-contained HTML reports make the platform suitable for
-        both field investigators and integration with SIEM/SOAR automation platforms.
-      </p>
+  <!-- config.py -->
+  <div class="module-card" id="s4-config">
+    <div class="module-header">
+      <span class="badge badge-gray">backend/</span>
+      <h4>config.py — Centralised Configuration</h4>
+    </div>
+    <div class="module-body">
+      <p><strong>Purpose:</strong> Single file for all environment variable reading and path constants. All other modules import from here — never use <code>os.getenv()</code> elsewhere.</p>
+      <table>
+        <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+        <tr><td><code>MONGODB_URI</code></td><td>mongodb://localhost:27017</td><td>Atlas connection string</td></tr>
+        <tr><td><code>DB_NAME</code></td><td>forensic_platform</td><td>MongoDB database name</td></tr>
+        <tr><td><code>OPENAI_API_KEY</code></td><td>""</td><td>GPT access key (optional)</td></tr>
+        <tr><td><code>OPENAI_MODEL</code></td><td>gpt-4o-mini</td><td>Model selection</td></tr>
+        <tr><td><code>MAX_UPLOAD_MB</code></td><td>4096</td><td>Upload size limit (4 GB)</td></tr>
+        <tr><td><code>PORT</code></td><td>8000</td><td>HTTP server port</td></tr>
+        <tr><td>Tool paths: <code>TSK_MMLS</code>, <code>TSK_FLS</code>…</td><td>mmls, fls…</td><td>Override if tools not on PATH</td></tr>
+        <tr><td>Analysis caps: <code>MAX_FILES_LIST</code> etc.</td><td>10000, 5000…</td><td>Prevent memory exhaustion on huge images</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
 
-      <div class="callout success">
-        <span class="callout-icon">🎓</span>
-        <div>
-          <strong>Key Academic Contributions:</strong>
-          <ol style="margin: 0.5rem 0 0; padding-left: 1.2rem;">
-            <li>A complete, working forensic platform designed and implemented from scratch.</li>
-            <li>Novel integration of LLM (GPT-4o-mini) into the forensic analysis pipeline for automated triage summarisation.</li>
-            <li>Demonstration of how traditional CLI forensic tools (TSK, ExifTool) can be orchestrated by a modern async Python web framework.</li>
-            <li>A fully mobile-responsive forensic interface — a gap not addressed by existing open-source tools.</li>
-            <li>Complete REST API enabling forensic automation and SOAR integration.</li>
-          </ol>
-        </div>
-      </div>
-    </section>
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 5 — FORENSIC PIPELINE
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s5">
+  <div class="section-header">
+    <div class="section-num">5</div>
+    <h2>Forensic Analysis Pipeline</h2>
+  </div>
+  <p>When <code>POST /api/analyze/{id}</code> is called, a FastAPI <code>BackgroundTask</code> executes the following steps sequentially. Each step writes progress to MongoDB for live UI updates.</p>
 
-    <!-- ════════════════════════════════════════════
-         SECTION 12 — REFERENCES
-    ═════════════════════════════════════════════ -->
-    <section class="doc-section" id="s12">
-      <div class="section-header">
-        <div class="section-num">12</div>
-        <h2>References</h2>
+  <div class="pipeline">
+    <div class="step">
+      <div class="step-line"><div class="step-num">1</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Evidence Type Detection &amp; Hashing (0–10%)</h4>
+        <p><code>ForensicAnalyzer.detect_type()</code> reads magic bytes to classify: e01, iso, disk_image, or logical_file. Then <code>compute_hashes()</code> streams the file in 64 KB chunks computing MD5 + SHA-1 + SHA-256 simultaneously. Results saved to the <code>evidence</code> MongoDB document.</p>
       </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">2</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Disk Image Analysis — mmls + fsstat (10–30%)</h4>
+        <p>For disk images: <code>DiskAnalyzer.run_mmls()</code> maps the partition table. <code>get_primary_offset()</code> identifies the boot partition's sector offset. <code>run_fsstat(-o offset)</code> extracts filesystem type, volume name, and block info. Skipped for logical files.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">3</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>File Listing — fls (30–45%)</h4>
+        <p><code>run_fls(offset, deleted_only=False)</code> recursively lists all files (capped at 5,000). <code>run_fls(offset, deleted_only=True)</code> extracts only deleted entries (capped at 2,000) using the <code>-d</code> flag. <code>run_ils()</code> maps inode table (capped at 1,000).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">4</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>File Recovery — tsk_recover (45–60%)</h4>
+        <p><code>DiskAnalyzer.recover_files(output_dir, offset)</code> runs <code>tsk_recover -o offset image output_dir</code>. Recovered files land in <code>storage/recovered/{job_id}/</code>. The directory is then walked to collect a list of all recovered file paths.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">5</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Artifact Extraction (60–75%)</h4>
+        <p><code>ArtifactExtractor.extract_all()</code> runs concurrently: (a) browser history from Chrome/Firefox SQLite files; (b) EXIF metadata from images via ExifTool; (c) multimedia file catalog; (d) document catalog. Optionally runs PhotoRec/Foremost media carving.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">6</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Timeline Construction (75–82%)</h4>
+        <p><code>TimelineBuilder.build_timeline(offset)</code>: if TSK is available, generates body file with <code>fls -m /</code> then converts with <code>mactime -d</code>. Parses CSV output into date-sorted events. Falls back to filesystem stat() if TSK unavailable. Capped at 2,000 events.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">7</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Keyword Search (82–90%)</h4>
+        <p><code>KeywordSearchEngine.search_all(keywords)</code> scans filenames, text file content, browser history, EXIF metadata, and SQLite databases for each keyword provided. Smart routing dispatches email patterns, file extensions, URLs, and general terms to the appropriate search method.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">8</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>AI Summary Generation (90–95%)</h4>
+        <p><code>AISummarizer.generate_summary(analysis_data)</code> constructs a structured prompt from all findings and sends to GPT-4o-mini. Returns a 5-section Markdown narrative. Falls back to template if no API key. The summary is embedded at the top of the HTML report.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-line"><div class="step-num">9</div><div class="step-connector"></div></div>
+      <div class="step-content">
+        <h4>Interactive HTML Report Generation (95–100%)</h4>
+        <p><code>ReportGenerator.generate()</code> assembles all results into a self-contained HTML file with embedded CSS, JavaScript, and Base64 images. Report is saved to <code>storage/reports/{job_id}/report.html</code> and the URL is returned as <code>/storage/reports/{job_id}/report.html</code>.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-      <div class="ref-item">
-        <span class="ref-num">1</span>
-        <strong>Carrier, B. (2005).</strong> <em>File System Forensic Analysis.</em> Addison-Wesley Professional.
-        — Foundational text covering TSK design, FAT/NTFS/ext analysis algorithms.
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">2</span>
-        <strong>Sleuth Kit Official Documentation.</strong> <em>The Sleuth Kit (TSK) — Open Source Digital Forensics.</em>
-        Available at: <code>https://www.sleuthkit.org/sleuthkit/docs.php</code>
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">3</span>
-        <strong>Harvey, P. (2024).</strong> <em>ExifTool — Reading, Writing and Editing Meta Information.</em>
-        Available at: <code>https://exiftool.org/</code>
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">4</span>
-        <strong>Ramírez, S. (2024).</strong> <em>FastAPI Documentation — High Performance Web Framework.</em>
-        Available at: <code>https://fastapi.tiangolo.com/</code>
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">5</span>
-        <strong>OpenAI (2024).</strong> <em>GPT-4o-mini Model Card and API Reference.</em>
-        Available at: <code>https://platform.openai.com/docs/models/gpt-4o-mini</code>
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">6</span>
-        <strong>NIST (2014).</strong> <em>Guide to Integrating Forensic Techniques into Incident Response (SP 800-86).</em>
-        National Institute of Standards and Technology.
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">7</span>
-        <strong>Ligh, M. H., Case, A., Levy, J., &amp; Walters, A. (2014).</strong>
-        <em>The Art of Memory Forensics.</em> Wiley.
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">8</span>
-        <strong>Carvey, H. (2011).</strong> <em>Windows Registry Forensics: Advanced Digital Forensic Analysis of the Windows Registry.</em> Syngress.
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">9</span>
-        <strong>Tailwind Labs (2024).</strong> <em>Tailwind CSS v3 Documentation.</em>
-        Available at: <code>https://tailwindcss.com/docs</code>
-      </div>
-      <div class="ref-item">
-        <span class="ref-num">10</span>
-        <strong>Render.com (2024).</strong> <em>Deploy a Python Web Service.</em>
-        Available at: <code>https://render.com/docs/deploy-fastapi</code>
-      </div>
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 6 — REST API REFERENCE
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s6">
+  <div class="section-header">
+    <div class="section-num">6</div>
+    <h2>REST API Reference</h2>
+  </div>
+  <p>Base URL: <code>https://forensic-platform.onrender.com</code> — Interactive docs at <code>/docs</code> (Swagger UI) and <code>/redoc</code> (ReDoc).</p>
 
-      <!-- Footer -->
-      <div class="doc-footer">
-        <p><strong>Digital Forensics Investigation Platform</strong> — Technical Documentation v1.0</p>
-        <p style="margin-top:0.4rem;">Author: Ayah Majali &nbsp;|&nbsp; GitHub: <strong>ayahmajali/forensic-platform</strong> &nbsp;|&nbsp; Year: 2025</p>
-        <p style="margin-top:0.4rem; font-size:0.76rem;">
-          Built with FastAPI · The Sleuth Kit · ExifTool · OpenAI GPT-4o-mini · Vanilla JS · Tailwind CSS
-        </p>
-      </div>
-    </section>
+  <table class="api-row">
+    <tr><th>Method</th><th>Path</th><th>Description</th><th>Key Request / Response</th></tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/health</code></td>
+      <td>Health check. Verifies MongoDB connectivity and TSK tool availability.</td>
+      <td><code>{status, mongo, tsk_available, tools: {mmls, fls, exiftool}}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-post">POST</span></td>
+      <td><code>/api/upload-evidence</code></td>
+      <td>Upload evidence file. Saves to disk and creates MongoDB document.</td>
+      <td>Form: <code>file</code> (multipart), <code>keywords</code> (comma-sep string) → <code>{evidence_id, filename, type, status}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/evidence/{id}</code></td>
+      <td>Get evidence record by ID.</td>
+      <td><code>{id, filename, type, status, hash_md5, hash_sha256, size_human, upload_date}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/evidence</code></td>
+      <td>List all evidence records (newest first).</td>
+      <td><code>[{evidence objects…}]</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-post">POST</span></td>
+      <td><code>/api/analyze/{id}</code></td>
+      <td>Start full forensic analysis as background task.</td>
+      <td>Body: <code>{openai_api_key?: string, keywords?: string[]}</code> → <code>202 {job_id, status:"processing"}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/results/{id}</code></td>
+      <td>Get live analysis results / progress. Poll every 3 s during analysis.</td>
+      <td><code>{status, progress:0-100, log:[], partitions, files_list, deleted_files, browser_history, metadata, timeline, search_results, ai_summary, report_url}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/search?q=keyword&amp;evidence_id=…</code></td>
+      <td>Real-time keyword search across the search_index collection.</td>
+      <td><code>{keyword, total_hits, results:[{match_type, file, context, line_number, source}]}</code></td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/api/report/{id}</code></td>
+      <td>Serve the generated HTML report directly.</td>
+      <td>Returns <code>text/html</code> — the interactive forensic report file</td>
+    </tr>
+    <tr>
+      <td><span class="method-get">GET</span></td>
+      <td><code>/</code></td>
+      <td>Root endpoint — returns platform name, version, docs URL.</td>
+      <td><code>{name, version, status, docs}</code></td>
+    </tr>
+  </table>
 
-  </main>
+  <h3>Live Analysis Polling Pattern</h3>
+<pre><code>// Frontend JavaScript polling pattern
+let pollTimer = setInterval(async () => {
+  const res = await fetch(`/api/results/${evidenceId}`);
+  const data = await res.json();
+
+  updateProgressBar(data.progress);    // 0–100
+  appendLogs(data.log);                // string[]
+  updateStepIndicators(data.status);   // processing / completed / failed
+
+  if (data.status === "completed") {
+    clearInterval(pollTimer);
+    window.location.href = `/api/report/${evidenceId}`;
+  }
+}, 3000);</code></pre>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 7 — DATA MODELS
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s7">
+  <div class="section-header">
+    <div class="section-num">7</div>
+    <h2>Data Models (Pydantic)</h2>
+  </div>
+  <p>All models are in <code>backend/models/</code>. Pydantic enforces types at runtime and generates JSON Schema for OpenAPI docs automatically.</p>
+
+  <h3>EvidenceCreate / EvidenceOut <span class="badge badge-blue" style="margin-left:.5rem">models/evidence.py</span></h3>
+  <table>
+    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    <tr><td>id</td><td>str (UUID)</td><td>MongoDB _id as string</td></tr>
+    <tr><td>filename</td><td>str</td><td>Original uploaded filename</td></tr>
+    <tr><td>path</td><td>str</td><td>Absolute server-side file path</td></tr>
+    <tr><td>size / size_human</td><td>int / str</td><td>Byte count and human-readable size</td></tr>
+    <tr><td>type</td><td>EvidenceType enum</td><td>disk_image | e01 | iso | logical_file | unknown</td></tr>
+    <tr><td>status</td><td>EvidenceStatus enum</td><td>uploaded | processing | completed | failed</td></tr>
+    <tr><td>upload_date</td><td>datetime</td><td>UTC timestamp of upload (auto-set)</td></tr>
+    <tr><td>hash_md5 / sha256 / sha1</td><td>Optional[str]</td><td>Computed after upload</td></tr>
+    <tr><td>keywords</td><td>list[str]</td><td>Keywords to search during analysis</td></tr>
+  </table>
+
+  <h3>AnalysisResult <span class="badge badge-green" style="margin-left:.5rem">models/analysis.py</span></h3>
+  <table>
+    <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+    <tr><td>evidence_id</td><td>str</td><td>Foreign key to evidence collection</td></tr>
+    <tr><td>status</td><td>str</td><td>pending | processing | completed | failed</td></tr>
+    <tr><td>progress</td><td>int (0–100)</td><td>Percentage completion for UI progress bar</td></tr>
+    <tr><td>log</td><td>list[str]</td><td>Live log messages from each pipeline step</td></tr>
+    <tr><td>partitions</td><td>list[PartitionInfo]</td><td>mmls output parsed into partition objects</td></tr>
+    <tr><td>filesystem_info</td><td>FilesystemInfo</td><td>fsstat output (type, name, block_size, etc.)</td></tr>
+    <tr><td>files_list</td><td>list[FileEntry]</td><td>All files from fls (capped at 5,000)</td></tr>
+    <tr><td>deleted_files</td><td>list[FileEntry]</td><td>Deleted files from fls -d (capped at 2,000)</td></tr>
+    <tr><td>browser_history</td><td>list[BrowserEntry]</td><td>Chrome/Firefox history (capped at 500)</td></tr>
+    <tr><td>metadata</td><td>list[MetadataEntry]</td><td>EXIF metadata per image (capped at 200)</td></tr>
+    <tr><td>multimedia</td><td>list[MultimediaFile]</td><td>Image/video catalog (capped at 300)</td></tr>
+    <tr><td>documents</td><td>list[DocumentFile]</td><td>Document catalog (capped at 300)</td></tr>
+    <tr><td>timeline</td><td>list[TimelineEvent]</td><td>MAC-time events (capped at 2,000)</td></tr>
+    <tr><td>search_results</td><td>dict[str, list[dict]]</td><td>keyword → list of SearchHit objects</td></tr>
+    <tr><td>ai_summary</td><td>str</td><td>Markdown string from GPT or template</td></tr>
+    <tr><td>report_url / report_path</td><td>Optional[str]</td><td>URL and filesystem path to HTML report</td></tr>
+  </table>
+
+  <h3>SearchHit <span class="badge badge-teal" style="margin-left:.5rem">models/search.py</span></h3>
+  <table>
+    <tr><th>Field</th><th>Description</th></tr>
+    <tr><td>match_type</td><td>filename | content | browser_history | metadata | database | email | url</td></tr>
+    <tr><td>keyword</td><td>The keyword that produced this hit</td></tr>
+    <tr><td>file</td><td>Relative file path or source identifier</td></tr>
+    <tr><td>context</td><td>Up to 200-character excerpt showing the match in context</td></tr>
+    <tr><td>line_number</td><td>Line number in file (content matches only)</td></tr>
+    <tr><td>visit_time</td><td>Timestamp (browser history matches only)</td></tr>
+    <tr><td>source</td><td>filesystem | file_content | browser | exif_metadata | sqlite | email_extract | url_extract</td></tr>
+  </table>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 8 — DEPLOYMENT GUIDE
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s8">
+  <div class="section-header">
+    <div class="section-num">8</div>
+    <h2>Deployment Guide</h2>
+  </div>
+
+  <h3>8.1 Local Development</h3>
+<pre><code># Prerequisites: Python 3.11, MongoDB, Sleuth Kit, ExifTool
+cd backend
+cp .env.example .env         # Fill in MONGODB_URI and OPENAI_API_KEY
+pip install -r requirements.txt
+python main.py               # Runs uvicorn on http://localhost:8000
+# Open browser: http://localhost:8000/docs  (Swagger UI)
+#              http://localhost:8000        (API root)</code></pre>
+
+  <h3>8.2 Render.com (Production Backend)</h3>
+  <div class="alert alert-info">
+    <span>ℹ️</span>
+    <span>The <code>render.yaml</code> in the repo root describes the service as code. Connect the GitHub repo to Render, then set the two secrets below.</span>
+  </div>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Root Directory</td><td><code>backend</code></td></tr>
+    <tr><td>Build Command</td><td><code>pip install -r requirements.txt</code></td></tr>
+    <tr><td>Start Command</td><td><code>uvicorn main:app --host 0.0.0.0 --port $PORT</code></td></tr>
+    <tr><td>Health Check Path</td><td><code>/api/health</code></td></tr>
+    <tr><td>MONGODB_URI (secret)</td><td>Your MongoDB Atlas connection string</td></tr>
+    <tr><td>OPENAI_API_KEY (secret)</td><td>Your OpenAI API key (optional)</td></tr>
+    <tr><td>PYTHON_VERSION</td><td><code>3.11.0</code></td></tr>
+  </table>
+
+  <h3>8.3 Cloudflare Pages (Frontend)</h3>
+<pre><code># The cloudflare-frontend/ directory is deployed directly to Cloudflare Pages
+# wrangler.toml specifies: pages_build_output_dir = "./cloudflare-frontend"
+
+# The _worker.js file in that directory automatically becomes the edge worker
+# It proxies /api/* to https://forensic-platform.onrender.com
+
+# To update the backend URL:
+# Edit cloudflare-frontend/_worker.js line 1:
+const BACKEND_URL = "https://your-render-url.onrender.com";</code></pre>
+
+  <h3>8.4 MongoDB Atlas Setup</h3>
+  <div class="feature-grid">
+    <div class="feature-item">
+      <div class="fi-title">1. Create Free Cluster</div>
+      <div class="fi-desc">MongoDB Atlas M0 free tier. Choose the same region as your Render service (e.g., Oregon / us-west-2) for low latency.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">2. Network Access</div>
+      <div class="fi-desc">Allow <code>0.0.0.0/0</code> (all IPs) for Render.com since its IP is dynamic. Or use Render's static outbound IPs if on paid plan.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">3. Connection String</div>
+      <div class="fi-desc">Format: <code>mongodb+srv://user:pass@cluster.mongodb.net/forensic_platform?retryWrites=true&w=majority</code></div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">4. Indexes</div>
+      <div class="fi-desc">Created automatically by <code>Database._create_indexes()</code> at startup. No manual Atlas index setup needed.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 9 — SECURITY & INTEGRITY
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s9">
+  <div class="section-header">
+    <div class="section-num">9</div>
+    <h2>Security &amp; Forensic Integrity</h2>
+  </div>
+
+  <h3>9.1 Evidence Integrity</h3>
+  <p>Every uploaded file is hashed before analysis begins. The hashes are stored in MongoDB and displayed prominently in the report. This follows the core forensic principle: evidence must be verifiable and unaltered.</p>
+  <table>
+    <tr><th>Hash Algorithm</th><th>Why Computed</th></tr>
+    <tr><td>MD5</td><td>Legacy compatibility — required by many law enforcement evidence forms</td></tr>
+    <tr><td>SHA-1</td><td>Still accepted by many forensic tools and court systems</td></tr>
+    <tr><td>SHA-256</td><td>Current gold standard — collision-resistant, recommended for new cases</td></tr>
+  </table>
+  <p>Hashing uses 64 KB streaming chunks to handle disk images up to hundreds of gigabytes without loading the entire file into RAM.</p>
+
+  <h3>9.2 Write-Blocking (Design Note)</h3>
+  <p>The platform reads evidence files using Python's standard <code>open(file, "rb")</code> — read-only mode. Sleuth Kit's <code>fls</code>, <code>mmls</code>, <code>fsstat</code> tools also open disk images read-only. However, for legally admissible forensics, use a hardware write-blocker between the storage medium and the analysis workstation before creating the disk image.</p>
+
+  <h3>9.3 API Key Security</h3>
+  <ul style="margin:.5rem 0 1rem 1.5rem; line-height:2;">
+    <li><code>OPENAI_API_KEY</code> and <code>MONGODB_URI</code> stored as Render.com environment secrets — never in git</li>
+    <li><code>.env</code> file in <code>.gitignore</code> to prevent accidental commits</li>
+    <li>API key submitted via UI is never stored server-side — only used for the duration of one analysis job</li>
+    <li>Cloudflare Worker shields the Render backend URL from direct exposure</li>
+  </ul>
+
+  <h3>9.4 Input Validation</h3>
+  <p>FastAPI + Pydantic validates all request parameters. File uploads are restricted by <code>MAX_UPLOAD_MB</code> (default 4 GB). Analysis caps (<code>MAX_FILES_LIST = 10,000</code>, etc.) prevent memory exhaustion from adversarially large disk images. All subprocess commands use list-form arguments (no shell=True) preventing command injection.</p>
+
+  <h3>9.5 CORS Configuration</h3>
+  <p>Currently set to <code>allow_origins=["*"]</code> for development flexibility. For production, replace with your specific Cloudflare Pages domain: <code>allow_origins=["https://forensic-platform.pages.dev"]</code>.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 10 — LIMITATIONS & ROADMAP
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s10">
+  <div class="section-header">
+    <div class="section-num">10</div>
+    <h2>Limitations &amp; Future Roadmap</h2>
+  </div>
+
+  <h3>10.1 Current Limitations</h3>
+  <table>
+    <tr><th>Limitation</th><th>Impact</th><th>Workaround / Fix</th></tr>
+    <tr><td>TSK tools require Linux/Mac</td><td>Windows deployment cannot use disk analysis features</td><td>Use Docker container with TSK installed on Linux</td></tr>
+    <tr><td>Free Render plan cold starts</td><td>First request after 15 min idle takes 30–60 s</td><td>Upgrade to Render Starter plan ($7/mo)</td></tr>
+    <tr><td>Free MongoDB Atlas 512 MB limit</td><td>Large analysis results may hit storage cap</td><td>Purge old jobs, upgrade to M2 cluster</td></tr>
+    <tr><td>Upload size limited to Render's 100 MB body limit</td><td>Cannot analyze full disk images over HTTP</td><td>Use pre-signed S3 URL upload, or local deployment</td></tr>
+    <tr><td>No user authentication</td><td>Any user can access any job by ID</td><td>Add JWT auth (FastAPI-Users library) as next step</td></tr>
+    <tr><td>CORS wildcard in production</td><td>Any domain can call the API</td><td>Restrict to Cloudflare Pages domain</td></tr>
+  </table>
+
+  <h3>10.2 Planned Future Features</h3>
+  <div class="feature-grid">
+    <div class="feature-item">
+      <div class="fi-title">🔐 JWT Authentication</div>
+      <div class="fi-desc">User accounts, case management, role-based access control for multi-investigator teams.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🐳 Docker Container</div>
+      <div class="fi-desc">Single Dockerfile with TSK, ExifTool, PhotoRec pre-installed for reliable cross-platform deployment.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">📧 Email Artifact Parsing</div>
+      <div class="fi-desc">Parse PST/OST (Outlook) and MBOX (Thunderbird) files for email forensics.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🗃️ Registry Analysis</div>
+      <div class="fi-desc">Parse Windows Registry hives for USB history, recently accessed files, user accounts.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🔗 AFF4 / EWF Support</div>
+      <div class="fi-desc">Extended support for AFF4 and advanced EWF variants via libewf bindings.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">📋 PDF/DOCX Export</div>
+      <div class="fi-desc">Export the forensic report as a court-ready PDF using WeasyPrint or ReportLab.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">🤖 AI Pattern Detection</div>
+      <div class="fi-desc">Use ML models to detect steganography in images and encrypted containers in disk images.</div>
+    </div>
+    <div class="feature-item">
+      <div class="fi-title">📡 Live Memory Analysis</div>
+      <div class="fi-desc">Integrate Volatility3 for RAM dump analysis: running processes, network connections, injected code.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════
+     SECTION 11 — CONCLUSION
+══════════════════════════════════════════════════════════ -->
+<section class="section" id="s11">
+  <div class="section-header">
+    <div class="section-num">11</div>
+    <h2>Conclusion</h2>
+  </div>
+
+  <p>The <strong>Digital Forensics Investigation Platform</strong> achieves its goal of providing a professional, browser-accessible forensic analysis workflow that competes with desktop tools like Autopsy for educational and research use cases.</p>
+
+  <h3>Technology Choices — Summary</h3>
+  <table>
+    <tr><th>Technology</th><th>Role</th><th>The One Reason It Was Chosen</th></tr>
+    <tr><td><strong>FastAPI</strong></td><td>Backend framework</td><td>Native async/await for background forensic tasks without blocking HTTP polling</td></tr>
+    <tr><td><strong>Motor / MongoDB</strong></td><td>Database</td><td>Document model fits variable-schema forensic results; Motor's async client integrates with FastAPI's event loop</td></tr>
+    <tr><td><strong>The Sleuth Kit</strong></td><td>Disk analysis</td><td>Industry-standard, court-accepted open-source forensic toolkit — no alternative covers E01/DD/ISO at the block level</td></tr>
+    <tr><td><strong>ExifTool</strong></td><td>Metadata extraction</td><td>Supports 100+ file formats, outputs clean JSON, extracts GPS and camera data that Python libraries miss</td></tr>
+    <tr><td><strong>SQLite3 (stdlib)</strong></td><td>Browser artifact parsing</td><td>Zero dependency — browsers store history in SQLite, making this the most direct parsing path</td></tr>
+    <tr><td><strong>OpenAI GPT-4o-mini</strong></td><td>AI summarization</td><td>Transforms thousands of raw forensic findings into a professional narrative with zero hand-written rules</td></tr>
+    <tr><td><strong>Vanilla JS</strong></td><td>Frontend</td><td>Zero runtime dependencies, no build step, full control — reliability is paramount for investigative tools</td></tr>
+    <tr><td><strong>Cloudflare Pages + Worker</strong></td><td>Frontend hosting</td><td>Free global CDN + edge worker that proxies backend, eliminating CORS issues and protecting backend URL</td></tr>
+    <tr><td><strong>Render.com</strong></td><td>Backend hosting</td><td>Free Python hosting with OS-level CLI tool support — essential for running Sleuth Kit and ExifTool</td></tr>
+    <tr><td><strong>Pydantic</strong></td><td>Data validation</td><td>Catches malformed evidence data at API boundaries and auto-generates OpenAPI documentation</td></tr>
+  </table>
+
+  <div class="alert alert-success" style="margin-top:2rem;">
+    <span>✅</span>
+    <span><strong>Project Links:</strong> &nbsp; GitHub: <code>https://github.com/ayahmajali/forensic-platform</code> &nbsp;|&nbsp; Frontend: <code>https://forensic-platform.pages.dev</code> &nbsp;|&nbsp; API Docs: <code>https://forensic-platform.onrender.com/docs</code></span>
+  </div>
+</section>
+
+</main>
 </div>
 
 <script>
-  /* Active TOC highlighting on scroll */
-  const sections = document.querySelectorAll('.doc-section');
-  const links = document.querySelectorAll('.toc-sidebar a');
+// Active sidebar highlighting
+const sections = document.querySelectorAll('.section');
+const links = document.querySelectorAll('.sidebar a');
 
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const id = entry.target.id;
-        links.forEach(l => {
-          l.classList.toggle('active', l.getAttribute('href') === '#' + id);
-        });
-      }
-    });
-  }, { rootMargin: '-20% 0px -70% 0px' });
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      links.forEach(l => {
+        l.classList.toggle('active',
+          l.getAttribute('href') === '#' + id ||
+          l.getAttribute('href') === '#s' + id.replace('s','')
+        );
+      });
+    }
+  });
+}, { rootMargin: '-20% 0px -70% 0px' });
 
-  sections.forEach(s => observer.observe(s));
+sections.forEach(s => observer.observe(s));
+
+// Smooth scroll for sidebar links
+document.querySelectorAll('.sidebar a').forEach(a => {
+  a.addEventListener('click', e => {
+    const target = document.querySelector(a.getAttribute('href'));
+    if (target) {
+      e.preventDefault();
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+});
 </script>
 </body>
 </html>
