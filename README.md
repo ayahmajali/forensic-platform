@@ -1,10 +1,12 @@
 # Digital Forensics Investigation Platform
 
-A professional **Digital Forensics Investigation Platform** inspired by Autopsy, built with **FastAPI** and modern web technologies. Analyzes disk images, logical files, and forensic containers with a full Sleuth Kit pipeline.
+A professional, graduate-level digital forensics investigation system built with FastAPI and Python.  
+Modelled after tools like Autopsy — supporting E01, DD/RAW, ISO, and logical file analysis with  
+AI-powered reporting.
 
 ---
 
-## 🚀 Live URLs
+## 🌐 Live URLs
 
 | Service | URL |
 |---------|-----|
@@ -12,220 +14,178 @@ A professional **Digital Forensics Investigation Platform** inspired by Autopsy,
 | **Backend API (Render.com)** | https://forensic-platform.onrender.com |
 | **GitHub Repository** | https://github.com/ayahmajali/forensic-platform |
 
-> ⚠️ **Note:** The Render.com free tier sleeps after 15 minutes of inactivity. The **first request may take ~30 seconds** to wake the server. Subsequent requests are fast.
+> ⚠️ Render free tier sleeps after 15 min idle — first request may take ~30 seconds to wake up.
 
 ---
 
-## 🔍 Features
+## ✅ Completed Features
 
-### Evidence Types Supported
-- **E01** (EnCase forensic images)
-- **DD / RAW** disk images
-- **ISO** images  
-- **Logical files** (PDF, DOCX, JPG, TXT, ZIP, etc.)
+### Analysis Pipeline
+- **Evidence Type Detection** — E01, DD, RAW, IMG, ISO, logical file
+- **Cryptographic Hashing** — MD5, SHA-1, SHA-256 (chain of custody)
+- **Disk Image Analysis** — mmls (partitions), fsstat (filesystem), fls (all/deleted files), ils (inodes)
+- **File Recovery** — tsk_recover with partition offset support
+- **Browser Artifacts** — Chrome History + Firefox places.sqlite (SQLite parsing)
+- **EXIF Metadata** — exiftool: GPS, camera model, serial, timestamps
+- **Forensic Timeline** — fls + mactime MAC-time events (fallback: filesystem timestamps)
+- **Deleted File Detection** — fls -rd with highlighted display in report
+- **Media Carving** — photorec / foremost support
+- **Keyword Search** — filenames, content, browser history, metadata, SQLite, emails, URLs
+- **AI Summarization** — OpenAI GPT-4o-mini with local template fallback
 
-### Forensic Analysis Pipeline
-1. **Evidence Type Detection** — Automatic detection via magic bytes & extension
-2. **Cryptographic Hashing** — MD5, SHA-1, SHA-256 chain of custody
-3. **Disk Image Analysis** — `mmls`, `fsstat`, `fls`, `ils` via Sleuth Kit
-4. **File Recovery** — `tsk_recover` for all & deleted files
-5. **Multimedia Extraction** — JPG, PNG, GIF, MP4, AVI, MOV detection & preview
-6. **EXIF Metadata** — Camera model, serial number, GPS, timestamps via `exiftool`
-7. **Browser Artifacts** — Chrome History, Firefox `places.sqlite`
-8. **Forensic Timeline** — `fls -r -m` + `mactime` MAC-time activity timeline
-9. **Deleted Files Detection** — `fls -rd` highlighting
-10. **Media Carving** — `photorec` / `foremost` integration
+### Frontend UI
+- Beautiful modern light-themed design with Inter font
+- Drag-and-drop evidence upload
+- Real-time progress tracking with 9-step visual pipeline
+- Investigation jobs list with status badges
+- Mobile-responsive with bottom navigation bar
+- Toast notifications
 
-### Search & Intelligence
-- **Keyword Search Engine** — Files, content, URLs, emails, executables, SQLite databases
-- **AI Summarization** — OpenAI GPT-4o-mini powered evidence summary
-- **Interactive HTML Report** — Full forensic report with live search, lightbox, and timeline
+### Interactive Report (auto-generated HTML)
+- AI Investigation Summary section
+- Evidence info + hash table
+- Stats cards (files, deleted, images, videos, docs, browser history)
+- Disk partitions table
+- Filesystem info (fsstat output)
+- All files table (filterable)
+- Deleted files table (highlighted red)
+- Multimedia gallery (images with lightbox, video player)
+- Documents catalog
+- Browser history table (Chrome + Firefox)
+- EXIF metadata with GPS links
+- Forensic timeline table
+- Keyword search results with context
+- Left sidebar navigation
+- Full mobile responsiveness
 
 ---
 
-## 🏗️ Architecture
+## 🗂️ Project Structure
 
 ```
 forensic-platform/
-├── backend/                         # FastAPI Python server (deployed to Render.com)
-│   ├── main.py                      # FastAPI application + all routes
-│   ├── start.py                     # Dev startup script
-│   ├── requirements.txt             # Python dependencies
-│   ├── modules/
-│   │   ├── analyzer.py              # Evidence type detection & hashing
-│   │   ├── disk_analysis.py         # Sleuth Kit disk analysis
-│   │   ├── artifact_extractor.py    # Browser history, EXIF, multimedia
-│   │   ├── timeline_builder.py      # Forensic timeline (fls + mactime)
-│   │   ├── keyword_search.py        # Multi-source keyword search
-│   │   ├── report_generator.py      # Interactive HTML report generator
-│   │   └── ai_summary.py            # OpenAI GPT-4o-mini summarization
-│   └── templates/
-│       └── index.html               # Main web interface
-├── cloudflare-frontend/             # Cloudflare Pages static deployment
-│   ├── index.html                   # Frontend UI (copied from backend/templates)
-│   ├── custom.css                   # Custom styles
-│   ├── _worker.js                   # CF Worker: proxies /api/* to Render backend
-│   └── _routes.json                 # Cloudflare Pages routing config
+├── backend/
+│   ├── main.py                    # FastAPI app — API routes & pipeline
+│   ├── start.py                   # Server startup script
+│   ├── requirements.txt           # Python dependencies
+│   ├── .env.example               # Environment variables template
+│   ├── templates/
+│   │   └── index.html             # Main frontend (Jinja2 template)
+│   ├── static/css/
+│   │   └── custom.css             # Global custom CSS
+│   └── modules/
+│       ├── analyzer.py            # Evidence type detection + hashing
+│       ├── disk_analysis.py       # Sleuth Kit disk analysis
+│       ├── artifact_extractor.py  # Browser history + metadata + media
+│       ├── timeline_builder.py    # MAC-time forensic timeline
+│       ├── keyword_search.py      # Multi-source keyword search
+│       ├── report_generator.py    # Interactive HTML report generator
+│       └── ai_summary.py          # OpenAI GPT summarization
+├── cloudflare-frontend/
+│   ├── index.html                 # Static frontend for Cloudflare Pages
+│   ├── custom.css                 # Synced CSS
+│   ├── _worker.js                 # Cloudflare Worker (proxies /api/* to Render)
+│   └── _routes.json               # Cloudflare routing config
+├── api/
+│   ├── index.py                   # Vercel ASGI entry point
+│   └── requirements.txt           # Vercel-specific deps
 ├── docs/
-│   └── documentation.html          # Full technical documentation (HTML)
-├── DOCUMENTATION.md                 # Full technical documentation (Markdown)
-├── render.yaml                      # Render.com deployment config
-├── Procfile                         # Process definition
-└── ecosystem.config.cjs             # PM2 config (local development)
+│   └── documentation.html         # Full technical documentation
+├── render.yaml                    # Render.com deployment config
+├── Procfile                       # Alternative start command
+├── runtime.txt                    # Python 3.11.0
+├── vercel.json                    # Vercel config (legacy)
+├── ecosystem.config.cjs           # PM2 local dev config
+└── README.md
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🔧 Tech Stack
+
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| **Backend** | FastAPI (Python) | Async, fast, auto-docs, type validation |
+| **Disk Forensics** | The Sleuth Kit (TSK) | Industry-standard, same as Autopsy |
+| **Metadata** | ExifTool | Best-in-class EXIF + GPS extraction |
+| **AI** | OpenAI GPT-4o-mini | Professional forensic summaries |
+| **Frontend** | Vanilla JS + Inter font | No framework bloat, fast load |
+| **Styling** | Custom CSS (no framework) | Full control, lightweight |
+| **Frontend Host** | Cloudflare Pages | Global CDN, free, fast |
+| **Backend Host** | Render.com | Python support, easy deployment |
+| **Version Control** | GitHub | ayahmajali/forensic-platform |
+
+---
+
+## 🚀 Local Setup (Windows)
 
 ### Prerequisites
+1. Python 3.11+
+2. [The Sleuth Kit](https://www.sleuthkit.org/sleuthkit/download.php) — add to PATH
+3. [ExifTool](https://exiftool.org/) — add to PATH
+4. (Optional) PhotoRec / Foremost for media carving
 
-**Windows:**
+### Install & Run
 ```bash
-# Install The Sleuth Kit
-# Download from: https://www.sleuthkit.org/sleuthkit/download.php
-# Add to PATH
-
-# Install exiftool
-# Download from: https://exiftool.org/
-```
-
-**Linux/Ubuntu:**
-```bash
-sudo apt-get install sleuthkit exiftool libimage-exiftool-perl
-sudo apt-get install foremost  # optional carving
-```
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/ayahmajali/forensic-platform.git
-cd forensic-platform/backend
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate      # Linux/Mac
-venv\Scripts\activate          # Windows
-
-# Install dependencies
+cd backend
 pip install -r requirements.txt
-
-# Configure environment (optional)
 cp .env.example .env
-# Edit .env and add OPENAI_API_KEY (optional)
-```
-
-### Running Locally
-
-```bash
-# Start the server
+# Edit .env → add OPENAI_API_KEY if desired
 python start.py
-
-# Or with uvicorn directly
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
-Open browser: **http://localhost:8000**
+Open http://localhost:8000
 
 ---
 
-## 📡 API Endpoints
+## ☁️ Render.com Deployment
+
+**Service Settings:**
+| Setting | Value |
+|---------|-------|
+| Runtime | Python |
+| Build Command | `pip install -r backend/requirements.txt` |
+| Start Command | `cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT` |
+| Health Check | `/api/health` |
+| Auto-Deploy | ✅ Enabled |
+
+**Environment Variables:**
+- `PYTHON_VERSION` = `3.11.0`
+- `OPENAI_API_KEY` = your key (optional)
+- `MONGODB_URI` = your URI (optional)
+
+---
+
+## ☁️ Cloudflare Pages Deployment
+
+The `cloudflare-frontend/` folder is deployed to Cloudflare Pages.  
+The `_worker.js` proxies all `/api/*` requests to the Render.com backend.
+
+**Build Settings:**
+| Setting | Value |
+|---------|-------|
+| Framework preset | None |
+| Build command | *(none)* |
+| Build output directory | `cloudflare-frontend` |
+
+---
+
+## 🔑 API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Main web interface |
-| `POST` | `/api/investigate` | Upload evidence & start analysis |
-| `GET` | `/api/status/{job_id}` | Get job status & progress |
-| `GET` | `/api/jobs` | List all jobs |
-| `GET` | `/api/report/{job_id}` | Get full report JSON |
-| `GET` | `/api/report-file/{job_id}` | View interactive HTML report |
+| `GET` | `/` | Main UI |
+| `POST` | `/api/investigate` | Upload evidence + start analysis |
+| `GET` | `/api/status/{job_id}` | Poll job status & progress |
+| `GET` | `/api/jobs` | List all investigation jobs |
+| `GET` | `/api/report/{job_id}` | Get JSON report data |
+| `GET` | `/api/report-file/{job_id}` | Serve HTML report |
 | `POST` | `/api/search/{job_id}` | Dynamic keyword search |
 | `DELETE` | `/api/jobs/{job_id}` | Delete job & files |
-| `GET` | `/api/health` | System health & tool availability |
-| `POST` | `/api/config/openai` | Set OpenAI API key |
-
----
-
-## 🛠️ Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| **Backend** | FastAPI + Python 3.11 |
-| **Frontend** | Vanilla JS + Tailwind CSS (CDN) |
-| **Disk Analysis** | The Sleuth Kit (TSK) |
-| **Metadata** | ExifTool |
-| **AI Summary** | OpenAI GPT-4o-mini |
-| **Frontend Hosting** | Cloudflare Pages |
-| **Backend Hosting** | Render.com |
-| **Version Control** | Git + GitHub |
-| **Process Manager** | PM2 (dev) / uvicorn (prod) |
-| **File Carving** | PhotoRec / Foremost |
-
----
-
-## ☁️ Deployment
-
-### Cloudflare Pages (Frontend)
-The `cloudflare-frontend/` folder is deployed to Cloudflare Pages. It contains a `_worker.js` that proxies all `/api/*` requests to the Render.com backend.
-
-**Live URL:** https://forensic-platform.pages.dev
-
-### Render.com (Backend)
-The `backend/` folder is deployed to Render.com as a Python web service.
-
-**Setup:**
-1. Sign up at https://render.com
-2. New Web Service → Connect `ayahmajali/forensic-platform`
-3. Root Directory: `backend`
-4. Build: `pip install -r requirements.txt`
-5. Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-6. Add environment variables:
-   - `OPENAI_API_KEY` = your key
-   - `MONGODB_URI` = your MongoDB Atlas URI (optional)
-
----
-
-## 📊 Interactive Report Sections
-
-1. **AI Investigation Summary** — GPT-generated executive summary
-2. **Evidence Information** — Name, type, size, hashes
-3. **Statistics Dashboard** — Files, deleted, images, videos counts
-4. **Disk Partitions** — mmls output table
-5. **Filesystem Info** — fsstat parsed output
-6. **All Files** — Searchable file listing
-7. **Deleted Files** — Highlighted deleted entries
-8. **Multimedia Preview** — Image lightbox & video player
-9. **Documents** — PDF, Word, Excel catalog
-10. **Browser History** — Chrome/Firefox URL table
-11. **EXIF Metadata** — Camera data with GPS map links
-12. **Forensic Timeline** — MAC-time activity table
-13. **Keyword Search Results** — All search hits by keyword
-
----
-
-## 📄 Documentation
-
-Full technical documentation available at:
-- **HTML (interactive):** `docs/documentation.html`
-- **Markdown:** `DOCUMENTATION.md`
-
----
-
-## 🔐 Security Notes
-
-- Evidence files are stored locally in `uploads/`
-- OpenAI API key is only held in memory (never persisted to disk)
-- For production: add authentication middleware
-- CORS currently allows all origins — restrict for production use
+| `POST` | `/api/config/openai` | Set OpenAI key at runtime |
+| `GET` | `/api/health` | Health check + tool availability |
 
 ---
 
 ## 📄 License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-*Built for digital forensics investigators — Graduate Project 2025*
-*Author: Ayah Majali | GitHub: [ayahmajali](https://github.com/ayahmajali)*
+MIT License — Graduate Research Project, Computer Science / Cybersecurity
