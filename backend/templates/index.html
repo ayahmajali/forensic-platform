@@ -711,6 +711,14 @@
   <span id="toolStatus" class="nav-badge">
     <i class="fas fa-exclamation-triangle"></i> TSK Not Found
   </span>
+  <a class="btn btn-ghost" href="#how-it-works">
+    <i class="fas fa-book-open"></i>
+    <span class="btn-label">How It Works</span>
+  </a>
+  <a class="btn btn-primary" href="/download-agent" style="background:var(--primary);color:#fff;border:none;padding:9px 18px;box-shadow:0 2px 8px var(--primary-glow)">
+    <i class="fas fa-download"></i>
+    <span class="btn-label">Download Agent</span>
+  </a>
   <button class="btn btn-ghost" onclick="checkHealth()">
     <i class="fas fa-heartbeat"></i>
     <span class="btn-label">Status</span>
@@ -722,20 +730,74 @@
   <div class="hero-content">
     <div class="hero-pill">
       <span></span>
-      Professional Digital Forensics Platform &nbsp;·&nbsp; v2.0
+      Local-first forensic scanning &nbsp;·&nbsp; macOS &amp; Windows agent
     </div>
     <h1>Investigate Evidence<br/><span class="highlight">Like a Professional</span></h1>
     <p class="hero-desc">
-      Upload disk images, forensic containers, or logical files.
-      Automatic Sleuth Kit analysis, file recovery, artifact extraction,
-      and AI-powered investigative reports — all in one platform.
+      Install our lightweight agent on macOS or Windows, scan a folder or disk image
+      locally, and view an automatically generated forensic report online —
+      Sleuth Kit analysis, deleted-file recovery, artifact extraction and an
+      AI-powered summary in one platform.
     </p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-bottom:28px">
+      <a href="/download-agent" class="btn" style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;padding:12px 26px;font-size:14px;font-weight:700;box-shadow:0 6px 18px rgba(99,102,241,.4)">
+        <i class="fab fa-apple"></i>&nbsp;<i class="fab fa-windows"></i>&nbsp; Download Agent
+      </a>
+      <a href="#how-it-works" class="btn" style="background:rgba(255,255,255,.08);color:#e0e7ff;border:1px solid rgba(165,180,252,.3);padding:12px 26px;font-size:14px;font-weight:600">
+        <i class="fas fa-book-open"></i>&nbsp; How It Works
+      </a>
+    </div>
     <div class="hero-chips">
-      <div class="hero-chip"><i class="fas fa-hdd"></i> E01 · DD · ISO · RAW</div>
+      <div class="hero-chip"><i class="fas fa-hdd"></i> E01 · DD · ISO · RAW · VMDK</div>
+      <div class="hero-chip"><i class="fas fa-file-archive"></i> ZIP · RAR</div>
+      <div class="hero-chip"><i class="fas fa-image"></i> JPG · PNG · PDF · DOCX</div>
       <div class="hero-chip"><i class="fas fa-trash-restore"></i> File Recovery</div>
-      <div class="hero-chip"><i class="fas fa-globe"></i> Browser Artifacts</div>
-      <div class="hero-chip"><i class="fas fa-history"></i> Timeline</div>
       <div class="hero-chip"><i class="fas fa-robot"></i> AI Summary</div>
+    </div>
+  </div>
+</section>
+
+<!-- ════════ HOW IT WORKS ════════ -->
+<section id="how-it-works" style="max-width:1100px;margin:56px auto 0;padding:0 20px">
+  <div style="text-align:center;margin-bottom:32px">
+    <div style="display:inline-block;background:var(--primary-light);color:var(--primary);padding:5px 14px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.08em;margin-bottom:10px">
+      THREE SIMPLE STEPS
+    </div>
+    <h2 style="font-size:clamp(22px,4vw,32px);font-weight:900;color:var(--text);letter-spacing:-.02em">How It Works</h2>
+    <p style="color:var(--text-muted);font-size:14px;margin-top:8px">
+      Install once, scan anywhere on your machine, review the report here.
+    </p>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm);position:relative">
+      <div style="position:absolute;top:-14px;left:20px;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:0 3px 10px var(--primary-glow)">1</div>
+      <div style="font-size:28px;color:var(--primary);margin:8px 0 12px"><i class="fas fa-download"></i></div>
+      <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px">Install the Agent</div>
+      <div style="font-size:13px;color:var(--text-muted);line-height:1.6">
+        Download the <a href="/download-agent" style="color:var(--primary);font-weight:600">macOS or Windows</a> binary.
+        No admin rights needed — just unzip and run.
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm);position:relative">
+      <div style="position:absolute;top:-14px;left:20px;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:0 3px 10px var(--primary-glow)">2</div>
+      <div style="font-size:28px;color:var(--accent);margin:8px 0 12px"><i class="fas fa-folder-open"></i></div>
+      <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px">Scan a Folder or Disk</div>
+      <div style="font-size:13px;color:var(--text-muted);line-height:1.6">
+        Point the agent at a directory — it hashes every file, extracts EXIF, PDF/DOCX text,
+        archive listings and deleted-file candidates locally. Raw files never leave your computer.
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow-sm);position:relative">
+      <div style="position:absolute;top:-14px;left:20px;background:linear-gradient(135deg,var(--primary),var(--accent));color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;box-shadow:0 3px 10px var(--primary-glow)">3</div>
+      <div style="font-size:28px;color:var(--success);margin:8px 0 12px"><i class="fas fa-file-pdf"></i></div>
+      <div style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:6px">Review the Report</div>
+      <div style="font-size:13px;color:var(--text-muted);line-height:1.6">
+        Findings are uploaded as a small JSON package. This site generates a full
+        HTML + PDF forensic report with timeline, hashes and AI summary.
+      </div>
     </div>
   </div>
 </section>
@@ -893,20 +955,20 @@
 <div class="stats-bar">
   <div class="stats-bar-inner">
     <div class="stat-item">
-      <div class="stat-num">10+</div>
-      <div class="stat-label">Analysis Modules</div>
+      <div class="stat-num">TSK</div>
+      <div class="stat-label">Sleuth Kit Pipeline</div>
     </div>
     <div class="stat-item">
-      <div class="stat-num">E01·DD·ISO</div>
-      <div class="stat-label">Evidence Formats</div>
+      <div class="stat-num">MD5 · SHA-256</div>
+      <div class="stat-label">Chain of Custody</div>
     </div>
     <div class="stat-item">
-      <div class="stat-num">AI</div>
-      <div class="stat-label">GPT-Powered Reports</div>
+      <div class="stat-num">macOS · Windows</div>
+      <div class="stat-label">Cross-Platform Agent</div>
     </div>
     <div class="stat-item">
-      <div class="stat-num">100%</div>
-      <div class="stat-label">Open Source</div>
+      <div class="stat-num">HTML · PDF</div>
+      <div class="stat-label">Forensic Reports</div>
     </div>
   </div>
 </div>
@@ -1005,9 +1067,9 @@
     <button class="bnav-btn" onclick="scrollToUpload()">
       <i class="fas fa-cloud-upload-alt"></i><span>Upload</span>
     </button>
-    <button class="bnav-btn bnav-cta" onclick="scrollToUpload()">
-      <i class="fas fa-search"></i><span>Analyze</span>
-    </button>
+    <a class="bnav-btn bnav-cta" href="/download-agent" style="text-decoration:none">
+      <i class="fas fa-download"></i><span>Agent</span>
+    </a>
     <button class="bnav-btn" onclick="scrollToJobs()">
       <i class="fas fa-list-alt"></i><span>Jobs</span>
     </button>

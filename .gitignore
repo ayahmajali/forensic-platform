@@ -14,7 +14,16 @@ dist/
 venv/
 env/
 .venv/
+.venv-build/
+.venv-agent/
 ENV/
+
+# PyInstaller build artefacts (the *output* binaries under
+# backend/static/downloads/ ARE committed so they can be served; the
+# intermediate build/dist/spec files are not).
+*.spec
+agent/build/
+agent/dist/
 
 # Environment Variables
 .env

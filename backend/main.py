@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -36,6 +36,9 @@ from modules.timeline_builder import TimelineBuilder
 from modules.keyword_search import KeywordSearchEngine
 from modules.report_generator import ReportGenerator
 from modules.ai_summary import AISummarizer
+from modules.database import case_store
+from modules.auth import require_agent_api_key
+from modules.pdf_report import generate_pdf_report
 
 # ─────────────────────────────────────────
 # Path Configuration
@@ -100,8 +103,35 @@ for _mount_path, _mount_dir, _mount_name in [
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# In-memory job store (production: use Redis/DB)
+# ─────────────────────────────────────────
+# Case / Job Store
+# ─────────────────────────────────────────
+# `investigation_jobs` is kept as a fast in-memory cache that the hot code-path
+# already depends on. Every mutation is mirrored to MongoDB (or the in-memory
+# fallback inside case_store) so cases survive a restart.
 investigation_jobs: dict = {}
+
+
+def _persist_job(job_id: str) -> None:
+    """Mirror the current in-memory job dict to the persistent case store."""
+    job = investigation_jobs.get(job_id)
+    if job is None:
+        return
+    try:
+        case_store.save_case(job_id, job)
+    except Exception as e:  # persistence must never crash the pipeline
+        print(f"[DB] _persist_job({job_id}) failed: {e}")
+
+
+def _patch_job(job_id: str, patch: dict) -> None:
+    """Merge-patch a job, updating memory + DB in one call."""
+    if job_id not in investigation_jobs:
+        return
+    investigation_jobs[job_id].update(patch)
+    try:
+        case_store.update_case(job_id, patch)
+    except Exception as e:
+        print(f"[DB] _patch_job({job_id}) failed: {e}")
 
 
 # ─────────────────────────────────────────
@@ -113,6 +143,7 @@ async def run_full_analysis(job_id: str, evidence_path: Path, evidence_name: str
     job["status"] = "running"
     job["progress"] = 5
     job["log"] = []
+    _persist_job(job_id)
 
     def log(msg: str):
         job["log"].append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
@@ -234,6 +265,7 @@ async def run_full_analysis(job_id: str, evidence_path: Path, evidence_name: str
         job["status"] = "completed"
         job["completed_at"] = datetime.now().isoformat()
         log("✅ Analysis complete! Report ready.")
+        _persist_job(job_id)
 
     except Exception as e:
         import traceback
@@ -243,6 +275,7 @@ async def run_full_analysis(job_id: str, evidence_path: Path, evidence_name: str
         job["traceback"] = tb
         log(f"❌ Analysis failed: {e}")
         print(tb)
+        _persist_job(job_id)
 
 
 def generate_local_summary(evidence_name, evidence_type, artifacts, disk_results, search_results, job):
@@ -299,7 +332,10 @@ history for potential evidence of user activity.
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    # Starlette >=0.29 changed TemplateResponse's signature: the Request must
+    # be the first positional argument now, not a key in the context dict.
+    # The old (name, {"request": ...}) form raises TypeError: unhashable dict.
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.post("/api/investigate")
@@ -323,20 +359,28 @@ async def start_investigation(
     
     investigation_jobs[job_id] = {
         "job_id": job_id,
+        "case_id": job_id,  # alias — matches the spec's "case_id" naming
         "evidence_name": evidence.filename,
         "evidence_path": str(evidence_path),
         "status": "queued",
         "progress": 0,
         "created_at": datetime.now().isoformat(),
         "log": [],
-        "keywords": kw_list
+        "keywords": kw_list,
+        "source": "web",
     }
-    
+    _persist_job(job_id)
+
     background_tasks.add_task(
         run_full_analysis, job_id, evidence_path, evidence.filename, kw_list
     )
-    
-    return JSONResponse({"job_id": job_id, "status": "queued", "message": "Investigation started"})
+
+    return JSONResponse({
+        "job_id": job_id,
+        "case_id": job_id,
+        "status": "queued",
+        "message": "Investigation started",
+    })
 
 
 @app.get("/api/status/{job_id}")
@@ -441,6 +485,10 @@ async def delete_job(job_id: str):
         shutil.rmtree(str(report))
     
     del investigation_jobs[job_id]
+    try:
+        case_store.delete_case(job_id)
+    except Exception as e:
+        print(f"[DB] delete_case({job_id}) failed: {e}")
     return JSONResponse({"message": "Job deleted successfully"})
 
 
@@ -483,7 +531,505 @@ async def health():
     tools = {}
     for tool in ["mmls", "fsstat", "fls", "ils", "tsk_recover", "exiftool", "photorec", "foremost"]:
         tools[tool] = shutil.which(tool) is not None
-    return JSONResponse({"status": "healthy", "tools": tools, "timestamp": datetime.now().isoformat()})
+    return JSONResponse({
+        "status": "healthy",
+        "tools": tools,
+        "database": case_store.health(),
+        "agent_auth_configured": bool(os.getenv("AGENT_API_KEY", "").strip()),
+        "timestamp": datetime.now().isoformat(),
+    })
+
+
+# ─────────────────────────────────────────
+# Startup — rehydrate the in-memory cache from MongoDB
+# ─────────────────────────────────────────
+
+@app.on_event("startup")
+async def _rehydrate_cases_from_db() -> None:
+    """
+    When the backend restarts, pull every previously stored case from Mongo
+    back into the `investigation_jobs` dict so the UI's list view still shows
+    historical investigations.
+    """
+    try:
+        cases = case_store.load_all()
+        loaded = 0
+        for cid, doc in cases.items():
+            # Jobs that were "running" when the server died can't resume — mark
+            # them as interrupted rather than leaving them stuck at X% forever.
+            if doc.get("status") == "running":
+                doc["status"] = "interrupted"
+                doc["error"] = "Server restarted while analysis was in progress"
+                case_store.update_case(cid, {
+                    "status": "interrupted",
+                    "error": doc["error"],
+                })
+            investigation_jobs[cid] = doc
+            loaded += 1
+        print(f"[startup] Rehydrated {loaded} cases from {case_store.health()['backend']}")
+    except Exception as e:
+        print(f"[startup] Case rehydration failed: {e}")
+
+
+# ─────────────────────────────────────────
+# Spec-compliant endpoint aliases
+# ─────────────────────────────────────────
+# The requirements document prescribes /analyze, /results/{case_id},
+# /timeline/{case_id}, /report/{case_id}. These routes delegate to the existing
+# /api/* handlers so both the frontend and a spec-conformant agent work.
+
+def _require_case(case_id: str) -> dict:
+    """Resolve a case from memory first, DB second. Raise 404 otherwise."""
+    job = investigation_jobs.get(case_id)
+    if job is None:
+        job = case_store.get_case(case_id)
+        if job is not None:
+            investigation_jobs[case_id] = job
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Case not found: {case_id}")
+    return job
+
+
+@app.post("/analyze")
+async def analyze_alias(
+    background_tasks: BackgroundTasks,
+    evidence: UploadFile = File(...),
+    keywords: str = Form(default="password,login,bitcoin,admin,secret,gmail,exe,pdf"),
+):
+    """Spec alias for POST /api/investigate."""
+    return await start_investigation(
+        background_tasks=background_tasks,
+        evidence=evidence,
+        keywords=keywords,
+    )
+
+
+@app.get("/results/{case_id}")
+async def results_alias(case_id: str):
+    """Spec alias — returns the full structured results JSON for a completed case."""
+    job = _require_case(case_id)
+    if job.get("status") != "completed":
+        return JSONResponse({
+            "case_id": case_id,
+            "status": job.get("status"),
+            "progress": job.get("progress"),
+            "message": "Analysis not complete",
+        }, status_code=202)
+    return JSONResponse({
+        "case_id": case_id,
+        "evidence_name": job.get("evidence_name"),
+        "evidence_type": job.get("evidence_type"),
+        "hashes": job.get("hashes", {}),
+        "disk_results": job.get("disk_results", {}),
+        "artifacts": job.get("artifacts", {}),
+        "timeline": job.get("timeline", [])[:200],
+        "search_results": job.get("search_results", {}),
+        "ai_summary": job.get("ai_summary", ""),
+        "recovered_count": job.get("recovered_count", 0),
+        "created_at": job.get("created_at"),
+        "completed_at": job.get("completed_at"),
+    })
+
+
+@app.get("/timeline/{case_id}")
+async def timeline_alias(case_id: str, limit: int = 500):
+    """
+    Return the forensic timeline for a case in a visualization-ready shape:
+    a list of events sorted chronologically with {timestamp, action, file}.
+    """
+    job = _require_case(case_id)
+    raw_tl = job.get("timeline", []) or []
+
+    # Normalise heterogeneous timeline shapes into a single schema so the
+    # frontend / a vis library can consume it without special-casing.
+    events = []
+    for ev in raw_tl[:limit]:
+        events.append({
+            "timestamp": ev.get("timestamp") or ev.get("time") or ev.get("datetime"),
+            "action": ev.get("action") or ev.get("macb") or ev.get("event") or "access",
+            "file": ev.get("file") or ev.get("path") or ev.get("name"),
+            "size": ev.get("size"),
+            "inode": ev.get("inode") or ev.get("meta_addr"),
+        })
+    return JSONResponse({
+        "case_id": case_id,
+        "count": len(events),
+        "truncated": len(raw_tl) > len(events),
+        "events": events,
+    })
+
+
+# ─────────────────────────────────────────
+# PDF report — new endpoint
+# ─────────────────────────────────────────
+
+def _render_pdf(case_id: str) -> Path:
+    """Render (or re-render) the PDF for a case and return its path."""
+    job = _require_case(case_id)
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Analysis not complete")
+
+    pdf_dir = REPORTS_DIR / case_id
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / f"forensic_report_{case_id}.pdf"
+
+    generate_pdf_report(
+        case_id=case_id,
+        evidence_name=job.get("evidence_name", "unknown"),
+        evidence_type=job.get("evidence_type", "unknown"),
+        hashes=job.get("hashes", {}),
+        disk_results=job.get("disk_results", {}),
+        artifacts=job.get("artifacts", {}),
+        timeline=job.get("timeline", []),
+        search_results=job.get("search_results", {}),
+        ai_summary=job.get("ai_summary", ""),
+        output_path=str(pdf_path),
+        created_at=job.get("completed_at") or job.get("created_at"),
+        recovered_count=job.get("recovered_count", 0),
+    )
+    return pdf_path
+
+
+@app.get("/api/report/{case_id}/pdf")
+async def download_pdf_report(case_id: str):
+    """Download the professional PDF forensic report for a completed case."""
+    pdf_path = _render_pdf(case_id)
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=f"forensic_report_{case_id}.pdf",
+    )
+
+
+@app.get("/report/{case_id}")
+async def download_pdf_report_alias(case_id: str):
+    """Spec alias — /report/{case_id} serves the PDF."""
+    return await download_pdf_report(case_id)
+
+
+# ─────────────────────────────────────────
+# Agent endpoint (API-key protected)
+# ─────────────────────────────────────────
+
+@app.post("/api/agent/upload")
+async def agent_upload(
+    background_tasks: BackgroundTasks,
+    evidence: UploadFile = File(...),
+    keywords: str = Form(default="password,login,bitcoin,admin,secret"),
+    investigator: str = Form(default="agent"),
+    _auth: None = Depends(require_agent_api_key),
+):
+    """
+    Upload evidence from a remote agent CLI.
+
+    Authentication
+    --------------
+    Requires a valid ``X-API-Key`` header matching AGENT_API_KEY on the server.
+    See backend/modules/auth.py for details.
+    """
+    job_id = str(uuid.uuid4())[:8]
+    safe_name = (evidence.filename or "evidence.bin").replace(" ", "_")
+    evidence_path = UPLOAD_DIR / f"{job_id}_{safe_name}"
+
+    async with aiofiles.open(str(evidence_path), "wb") as f:
+        content = await evidence.read()
+        await f.write(content)
+
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+
+    investigation_jobs[job_id] = {
+        "job_id": job_id,
+        "case_id": job_id,
+        "evidence_name": evidence.filename,
+        "evidence_path": str(evidence_path),
+        "status": "queued",
+        "progress": 0,
+        "created_at": datetime.now().isoformat(),
+        "log": [],
+        "keywords": kw_list,
+        "source": "agent",
+        "investigator": investigator,
+    }
+    _persist_job(job_id)
+
+    background_tasks.add_task(
+        run_full_analysis, job_id, evidence_path, evidence.filename, kw_list
+    )
+
+    return JSONResponse({
+        "case_id": job_id,
+        "job_id": job_id,
+        "status": "queued",
+        "status_url": f"/api/status/{job_id}",
+        "results_url": f"/results/{job_id}",
+        "pdf_url": f"/report/{job_id}",
+        "message": "Evidence received. Analysis started.",
+    })
+
+
+# ─────────────────────────────────────────
+# Agent findings endpoint
+# ─────────────────────────────────────────
+# Accepts a JSON "findings" package produced by the local agent scanner and
+# materialises it as a full case — so the UI, /results, /timeline, /report all
+# work without the raw evidence ever being uploaded.
+#
+# This is how the "download agent → scan locally → view report online"
+# workflow hangs together. Authentication is required (X-API-Key).
+
+
+def _findings_to_case(findings: dict, case_id: str) -> dict:
+    """
+    Translate a scanner-produced findings dict into the shape the rest of the
+    backend expects from run_full_analysis (artifacts / timeline / search /
+    disk_results / hashes). This is the bridge between "remote scan" and
+    "normal case" so the existing PDF/JSON/HTML report machinery works.
+    """
+    files = findings.get("files") or []
+    summary = findings.get("summary") or {}
+    host = findings.get("host") or {}
+    now_iso = datetime.utcnow().isoformat()
+
+    # ── Buckets (same shape ArtifactExtractor produces) ─────────────────────
+    multimedia: list = []
+    documents: list = []
+    metadata_entries: list = []
+    browser_history: list = []  # not inferable from a logical scan
+    timeline_events: list = []
+    deleted_files: list = []    # only available when we get a disk image
+
+    for f in files:
+        ftype = f.get("type")
+        entry = {
+            "path": f.get("path"),
+            "name": f.get("name"),
+            "size": f.get("size"),
+            "md5": f.get("md5"),
+            "sha256": f.get("sha256"),
+            "mtime": f.get("mtime"),
+            "atime": f.get("atime"),
+            "ctime": f.get("ctime"),
+        }
+
+        if ftype == "image":
+            entry["type"] = "image"
+            entry["exif"] = f.get("exif") or {}
+            multimedia.append(entry)
+            if entry["exif"]:
+                metadata_entries.append({
+                    "file": f.get("name"),
+                    "metadata": entry["exif"],
+                })
+        elif ftype in {"pdf", "docx", "text"}:
+            entry["type"] = ftype
+            entry["text_preview"] = f.get("text_preview", "")
+            entry["metadata"] = f.get("metadata", {})
+            documents.append(entry)
+            if entry["metadata"]:
+                metadata_entries.append({
+                    "file": f.get("name"),
+                    "metadata": entry["metadata"],
+                })
+        elif ftype in {"archive_zip", "archive_rar"}:
+            entry["type"] = ftype
+            entry["member_count"] = f.get("member_count", 0)
+            entry["members_preview"] = (f.get("members") or [])[:10]
+            documents.append(entry)
+
+        # ── Timeline: one event per MAC time, if present ────────────────────
+        for macb, ts in (
+            ("modified", f.get("mtime")),
+            ("accessed", f.get("atime")),
+            ("changed",  f.get("ctime")),
+        ):
+            if ts:
+                timeline_events.append({
+                    "timestamp": ts,
+                    "action": macb,
+                    "file": f.get("path"),
+                    "size": f.get("size"),
+                })
+
+    timeline_events.sort(key=lambda e: e["timestamp"] or "")
+
+    # ── Keyword search across text previews ────────────────────────────────
+    search_results: dict = {}
+    for kw in (findings.get("keywords") or []):
+        hits = []
+        kw_l = kw.lower()
+        for f in files:
+            haystack = " ".join(filter(None, [
+                f.get("text_preview", ""),
+                f.get("name", ""),
+            ])).lower()
+            if kw_l and kw_l in haystack:
+                hits.append({
+                    "file": f.get("path"),
+                    "match": f.get("name"),
+                    "context": (f.get("text_preview", "") or "")[:200],
+                })
+        if hits:
+            search_results[kw] = hits
+
+    # ── Chain-of-custody hash for the "root" — a hash of hashes ────────────
+    all_sha = [f.get("sha256") for f in files if f.get("sha256")]
+    import hashlib as _hashlib
+    roll = _hashlib.sha256("\n".join(all_sha).encode()).hexdigest() if all_sha else ""
+
+    return {
+        "job_id": case_id,
+        "case_id": case_id,
+        "evidence_name": os.path.basename(findings.get("root") or "logical_scan"),
+        "evidence_type": "logical_scan",
+        "status": "completed",
+        "progress": 100,
+        "source": "agent-scan",
+        "investigator": findings.get("investigator", "agent"),
+        "created_at": now_iso,
+        "completed_at": now_iso,
+        "scanned_at": findings.get("scanned_at"),
+        "host": host,
+        "root": findings.get("root"),
+        "keywords": findings.get("keywords", []),
+        "hashes": {
+            "sha256_of_contents": roll,
+            "file_count": len(files),
+        },
+        "disk_results": {
+            "partitions": [],
+            "deleted_files": deleted_files,
+            "file_system": "logical",
+        },
+        "artifacts": {
+            "multimedia": multimedia,
+            "documents": documents,
+            "metadata": metadata_entries,
+            "browser_history": browser_history,
+        },
+        "timeline": timeline_events,
+        "search_results": search_results,
+        "recovered_count": len(files),
+        "ai_summary": _local_summary_from_findings(findings, len(files), timeline_events, search_results),
+        "log": [f"[{datetime.now().strftime('%H:%M:%S')}] Remote scan ingested from agent"],
+        "scanner_findings_sample": {
+            "summary": summary,
+            "errors": (findings.get("errors") or [])[:20],
+            "rar_files": findings.get("rar_files", []),
+            "images_to_upload": findings.get("images_to_upload", []),
+        },
+    }
+
+
+def _local_summary_from_findings(findings: dict, n_files: int, timeline: list, search: dict) -> str:
+    """Tiny markdown summary used when OpenAI isn't configured for agent scans."""
+    summary = findings.get("summary", {})
+    by_type = summary.get("by_type", {})
+    host = findings.get("host", {})
+    flagged = [f"**{k}** ({len(v)} hits)" for k, v in search.items() if v]
+    return f"""## Remote Agent Scan — {findings.get('root', 'unknown')}
+
+**Host:** {host.get('hostname', '?')} ({host.get('os', '?')}, user `{host.get('user', '?')}`)
+**Scanned at:** {findings.get('scanned_at', '?')}
+**Scanner version:** {findings.get('scanner_version', '?')}
+
+### Summary
+- **{n_files}** files examined locally
+- **{summary.get('total_size_bytes', 0):,}** bytes total
+- File types: {', '.join(f'{k}={v}' for k, v in by_type.items()) or '—'}
+- **{summary.get('with_exif', 0)}** files carry EXIF metadata
+- **{summary.get('with_text', 0)}** files had extractable text
+- **{len(timeline)}** timeline events (MAC times)
+
+### Keyword findings
+{('- ' + '; '.join(flagged)) if flagged else '- No keyword hits.'}
+
+### Next steps
+Review the file listing, timeline and keyword hits below. Disk images found
+during the scan were **not** analysed locally — re-run with
+`forensic-agent upload <disk.img>` to send them to the backend for Sleuth Kit.
+"""
+
+
+@app.post("/api/agent/findings")
+async def agent_findings(
+    request: Request,
+    _auth: None = Depends(require_agent_api_key),
+):
+    """
+    Ingest a findings package from the local agent scanner.
+
+    The body must be JSON produced by ``scanner.scan()``. The backend creates
+    a new case and the normal /results, /timeline and /report endpoints then
+    serve it — no raw evidence is ever shipped over the wire.
+    """
+    try:
+        findings = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON body: {e}")
+
+    if not isinstance(findings, dict) or "files" not in findings:
+        raise HTTPException(
+            status_code=422,
+            detail="Body must be a findings dict with a 'files' list.",
+        )
+
+    case_id = str(uuid.uuid4())[:8]
+    case = _findings_to_case(findings, case_id)
+    investigation_jobs[case_id] = case
+    _persist_job(case_id)
+
+    return JSONResponse({
+        "case_id": case_id,
+        "job_id": case_id,
+        "status": "completed",
+        "status_url": f"/api/status/{case_id}",
+        "results_url": f"/results/{case_id}",
+        "timeline_url": f"/timeline/{case_id}",
+        "pdf_url": f"/report/{case_id}",
+        "file_count": case["recovered_count"],
+        "images_to_upload": findings.get("images_to_upload", []),
+        "message": "Findings ingested and case created.",
+    })
+
+
+# ─────────────────────────────────────────
+# Agent downloads — serve binaries / source from /downloads
+# ─────────────────────────────────────────
+
+@app.get("/download-agent")
+async def download_agent_page(request: Request):
+    """Render the Download Agent page with install instructions for Mac + Windows."""
+    return templates.TemplateResponse(request, "download_agent.html")
+
+
+@app.get("/api/agent/download/{platform_name}")
+async def download_agent_binary(platform_name: str):
+    """
+    Serve a pre-built agent binary for the requested platform.
+
+    ``platform_name`` must be one of: ``macos``, ``windows``, ``source``.
+    Binaries are built with PyInstaller (see agent/build_*.sh) and placed in
+    ``backend/static/downloads/`` before deployment.
+    """
+    mapping = {
+        "macos":   ("forensic-agent-macos",   "application/octet-stream"),
+        "windows": ("forensic-agent-windows.exe", "application/octet-stream"),
+        "source":  ("forensic-agent-source.zip", "application/zip"),
+    }
+    if platform_name not in mapping:
+        raise HTTPException(status_code=404, detail="Unknown platform")
+    fname, mime = mapping[platform_name]
+    fpath = STATIC_DIR / "downloads" / fname
+    if not fpath.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"{fname} not built yet. Run agent/build_{platform_name}.sh "
+                "(or build_windows.bat) on the matching OS and place the binary "
+                "in backend/static/downloads/."
+            ),
+        )
+    return FileResponse(path=str(fpath), media_type=mime, filename=fname)
 
 
 if __name__ == "__main__":
