@@ -64,6 +64,20 @@ EXT_TEXT      = {".txt", ".csv", ".log", ".md", ".json", ".xml", ".html", ".htm"
 EXT_ZIP       = {".zip"}
 EXT_RAR       = {".rar"}
 EXT_DISK_IMG  = {".dd", ".img", ".raw", ".iso", ".001", ".vmdk", ".e01", ".aff", ".ewf", ".vhd"}
+EXT_VIDEO     = {".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv", ".webm", ".m4v"}
+EXT_AUDIO     = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
+EXT_SQLITE    = {".sqlite", ".sqlite3", ".db"}
+
+# Filenames that indicate a browser profile database. SQLite magic bytes are
+# confirmed before parsing — otherwise a file named "History" but not actually
+# SQLite would blow up sqlite3.connect.
+BROWSER_DB_NAMES = {
+    "History",         # Chrome / Chromium / Edge / Brave / Opera
+    "history",         # case variations
+    "places.sqlite",   # Firefox / Tor Browser
+    "Cookies",         # Chrome cookies (useful forensic artefact)
+    "Login Data",      # Chrome saved logins
+}
 
 # Hard cap so a scan of a huge folder doesn't eat all memory. The backend's
 # report can say "truncated at N files" without losing analytic value.
@@ -106,27 +120,43 @@ def _stat_times(path: Path) -> Dict[str, Optional[str]]:
 
 
 def _hash_file(path: Path) -> Dict[str, Any]:
-    """MD5 + SHA-256 + size. Streams to avoid memory issues on multi-GB files."""
+    """
+    MD5 + SHA-1 + SHA-256 + size.
+
+    All three digests are computed in a single streaming pass — cost of the
+    extra SHA-1 is ~5% on top of the two other hashes, which is a fair trade
+    for chain-of-custody reports that require all three (Autopsy and most
+    court-admissible forensic tools compute the same triple).
+    """
     md5 = hashlib.md5()
-    sha = hashlib.sha256()
+    sha1 = hashlib.sha1()
+    sha256 = hashlib.sha256()
     size = 0
     try:
         with path.open("rb") as f:
             for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
                 md5.update(chunk)
-                sha.update(chunk)
+                sha1.update(chunk)
+                sha256.update(chunk)
                 size += len(chunk)
     except OSError as e:
         return {"error": f"hash failed: {e}"}
     return {
         "md5": md5.hexdigest(),
-        "sha256": sha.hexdigest(),
+        "sha1": sha1.hexdigest(),
+        "sha256": sha256.hexdigest(),
         "size": size,
     }
 
 
 def _classify(path: Path) -> str:
+    name = path.name
     ext = path.suffix.lower()
+
+    # Browser profile databases are detected by filename, not extension —
+    # Chrome's 'History' file has no extension at all.
+    if name in BROWSER_DB_NAMES: return "browser_db"
+
     if ext in EXT_IMAGE:    return "image"
     if ext in EXT_PDF:      return "pdf"
     if ext in EXT_DOCX:     return "docx"
@@ -134,6 +164,9 @@ def _classify(path: Path) -> str:
     if ext in EXT_ZIP:      return "archive_zip"
     if ext in EXT_RAR:      return "archive_rar"
     if ext in EXT_DISK_IMG: return "disk_image"
+    if ext in EXT_VIDEO:    return "video"
+    if ext in EXT_AUDIO:    return "audio"
+    if ext in EXT_SQLITE:   return "sqlite"
     return "other"
 
 
@@ -238,6 +271,211 @@ def _extract_text_file(path: Path) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Browser history parser — Chrome / Edge / Firefox
+# ─────────────────────────────────────────────────────────────────────────────
+
+# How many visit rows we pull from each database. 500 is plenty for a report
+# and keeps the findings JSON small enough to POST in a single request.
+BROWSER_HISTORY_ROW_CAP = 500
+
+# Chrome stores timestamps as microseconds since 1601-01-01 UTC.
+# Subtracting this offset converts to standard Unix epoch microseconds.
+CHROME_EPOCH_OFFSET_US = 11_644_473_600_000_000
+
+
+def _is_sqlite(path: Path) -> bool:
+    """Check SQLite magic bytes before opening with sqlite3 — avoids noisy
+    exceptions when a file named `History` turns out to be something else."""
+    try:
+        with path.open("rb") as f:
+            return f.read(16).startswith(b"SQLite format 3")
+    except OSError:
+        return False
+
+
+def _chrome_time_to_iso(webkit_us: Optional[int]) -> Optional[str]:
+    if not webkit_us:
+        return None
+    try:
+        unix_us = webkit_us - CHROME_EPOCH_OFFSET_US
+        if unix_us <= 0:
+            return None
+        return datetime.fromtimestamp(unix_us / 1_000_000, tz=timezone.utc) \
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _firefox_time_to_iso(epoch_us: Optional[int]) -> Optional[str]:
+    if not epoch_us:
+        return None
+    try:
+        return datetime.fromtimestamp(epoch_us / 1_000_000, tz=timezone.utc) \
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _copy_to_tmp(path: Path) -> Optional[Path]:
+    """
+    Browsers lock their SQLite DB while running. Copying to a temp file avoids
+    `database is locked` errors at the cost of one read. Returns the temp path
+    (caller responsible for cleanup) or None on failure.
+    """
+    import shutil
+    import tempfile
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="fa_browser_", suffix=".sqlite")
+        os.close(fd)
+        shutil.copyfile(str(path), tmp)
+        return Path(tmp)
+    except OSError:
+        return None
+
+
+def _parse_chrome_history(path: Path) -> List[Dict[str, Any]]:
+    """
+    Read the `urls` + `visits` tables from a Chrome/Edge/Chromium History DB.
+    Returns a list of {url, title, visit_count, last_visit_at, browser}.
+    """
+    import sqlite3
+
+    tmp = _copy_to_tmp(path)
+    target = tmp or path
+    out: List[Dict[str, Any]] = []
+    try:
+        con = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=2)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        cur.execute(
+            "SELECT url, title, visit_count, last_visit_time "
+            "FROM urls ORDER BY last_visit_time DESC LIMIT ?",
+            (BROWSER_HISTORY_ROW_CAP,),
+        )
+        for row in cur.fetchall():
+            out.append({
+                "url": row["url"],
+                "title": row["title"] or "",
+                "visit_count": row["visit_count"] or 0,
+                "last_visit_at": _chrome_time_to_iso(row["last_visit_time"]),
+                "browser": "chrome/edge",
+                "source": str(path),
+            })
+        con.close()
+    except sqlite3.DatabaseError as e:
+        return [{"error": f"chrome history read failed: {e}", "source": str(path)}]
+    finally:
+        if tmp and tmp.exists():
+            try: tmp.unlink()
+            except OSError: pass
+    return out
+
+
+def _parse_firefox_history(path: Path) -> List[Dict[str, Any]]:
+    """
+    Read moz_places from a Firefox profile's places.sqlite. Returns entries
+    in the same shape as _parse_chrome_history so downstream code is uniform.
+    """
+    import sqlite3
+
+    tmp = _copy_to_tmp(path)
+    target = tmp or path
+    out: List[Dict[str, Any]] = []
+    try:
+        con = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=2)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        cur.execute(
+            "SELECT url, title, visit_count, last_visit_date "
+            "FROM moz_places ORDER BY last_visit_date DESC LIMIT ?",
+            (BROWSER_HISTORY_ROW_CAP,),
+        )
+        for row in cur.fetchall():
+            out.append({
+                "url": row["url"],
+                "title": row["title"] or "",
+                "visit_count": row["visit_count"] or 0,
+                "last_visit_at": _firefox_time_to_iso(row["last_visit_date"]),
+                "browser": "firefox",
+                "source": str(path),
+            })
+        con.close()
+    except sqlite3.DatabaseError as e:
+        return [{"error": f"firefox history read failed: {e}", "source": str(path)}]
+    finally:
+        if tmp and tmp.exists():
+            try: tmp.unlink()
+            except OSError: pass
+    return out
+
+
+def _extract_browser_history(path: Path) -> Dict[str, Any]:
+    """
+    Dispatch on filename + SQLite magic. Returns a dict with either a
+    `history_entries` list (on success) or `note` (when we can't parse).
+    """
+    name = path.name
+    if name.lower() == "places.sqlite":
+        if _is_sqlite(path):
+            entries = _parse_firefox_history(path)
+            return {"browser": "firefox", "history_entries": entries}
+        return {"note": "File named places.sqlite but not a SQLite database."}
+    if name in ("History", "history"):
+        if _is_sqlite(path):
+            entries = _parse_chrome_history(path)
+            # Best-effort guess at which Chromium-family browser this is
+            # based on the profile path.
+            parent = str(path.parent).lower()
+            browser = ("edge"   if "edge"    in parent else
+                       "brave"  if "brave"   in parent else
+                       "opera"  if "opera"   in parent else
+                       "chrome")
+            return {"browser": browser, "history_entries": entries}
+        return {"note": "File named History but not a SQLite database."}
+    # Cookies / Login Data — flagged but we don't parse them into the report
+    # (cookie contents can contain secrets the user didn't consent to exfiltrate).
+    return {"note": f"Browser profile DB ({name}) — not parsed (privacy)."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Video / audio metadata probe (ffprobe if available)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _extract_media_metadata(path: Path) -> Dict[str, Any]:
+    """
+    Best-effort probe of a video/audio file. Uses ffprobe if it's on PATH
+    (optional — the scanner works fine without it). Returns codec, duration,
+    and frame-rate when available.
+    """
+    from shutil import which
+    if not which("ffprobe"):
+        return {}
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_format", "-show_streams",
+             "-print_format", "json", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return {}
+        data = json.loads(out.stdout)
+        fmt = data.get("format", {}) or {}
+        streams = data.get("streams", []) or []
+        video = next((s for s in streams if s.get("codec_type") == "video"), None)
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        return {
+            "duration_seconds": float(fmt["duration"]) if fmt.get("duration") else None,
+            "bitrate": int(fmt["bit_rate"]) if fmt.get("bit_rate") else None,
+            "video_codec": video.get("codec_name") if video else None,
+            "audio_codec": audio.get("codec_name") if audio else None,
+            "width":  video.get("width")  if video else None,
+            "height": video.get("height") if video else None,
+        }
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError, ValueError):
+        return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main scanner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -274,10 +512,18 @@ def scan(
         "files": [],
         "images_to_upload": [],
         "rar_files": [],
+        # Browser history rows extracted locally from Chrome/Edge/Firefox DBs.
+        # Kept as a flat list so the backend can render a unified timeline
+        # without having to re-open per-file entries.
+        "browser_history": [],
+        # Video files with ffprobe-extracted metadata (codec, duration, dims).
+        # Flat list for the "Videos" section of the interactive report.
+        "videos": [],
         "errors": [],
         "summary": {
             "total_files": 0, "total_size_bytes": 0,
             "by_type": {}, "with_exif": 0, "with_text": 0,
+            "with_history": 0, "history_rows": 0,
             "truncated": False,
         },
     }
@@ -320,6 +566,30 @@ def scan(
                 findings["images_to_upload"].append(entry["path"])
             if entry["type"] == "archive_rar":
                 findings["rar_files"].append(entry["path"])
+            # Browser history rows bubble up from _process_file() when it's
+            # pointed at a Chrome/Edge/Firefox profile DB. We keep a flat
+            # top-level list so downstream code doesn't have to walk files[].
+            hist = entry.get("history_entries")
+            if hist:
+                # Filter out the "error" stub rows — they stay inside the
+                # per-file entry for debugging but shouldn't pollute the
+                # unified timeline.
+                clean = [h for h in hist if isinstance(h, dict) and "url" in h]
+                if clean:
+                    findings["browser_history"].extend(clean)
+                    findings["summary"]["with_history"] += 1
+                    findings["summary"]["history_rows"] += len(clean)
+            # Surface videos with their probed metadata in a dedicated list
+            # so the report can render a "Videos" gallery.
+            if entry["type"] == "video" and entry.get("media"):
+                findings["videos"].append({
+                    "path": entry["path"],
+                    "name": entry["name"],
+                    "size": entry.get("size"),
+                    "md5": entry.get("md5"),
+                    "sha256": entry.get("sha256"),
+                    **entry["media"],
+                })
         except Exception as e:
             findings["errors"].append({"path": str(path), "error": str(e)})
         if on_progress:
@@ -373,6 +643,26 @@ def _process_file(path: Path, *, include_rar: bool, root: Path) -> Optional[Dict
             entry.update(rar_info)
         else:
             entry["note"] = "RAR contents skipped by user choice."
+    elif ftype == "browser_db":
+        # Parses Chrome/Edge/Brave/Opera `History` and Firefox `places.sqlite`
+        # in-place. Returns {browser, history_entries} or {note} when parsing
+        # is declined (e.g. Cookies / Login Data for privacy reasons).
+        entry.update(_extract_browser_history(path))
+    elif ftype == "sqlite":
+        # Generic SQLite file — don't enumerate its tables by default
+        # (could contain anything). Flag it so the investigator sees it.
+        if _is_sqlite(path):
+            entry["note"] = "SQLite database — skipped generic parsing. Inspect manually."
+        else:
+            entry["note"] = "Named like a SQLite DB but magic bytes don't match."
+    elif ftype == "video":
+        meta = _extract_media_metadata(path)
+        if meta:
+            entry["media"] = meta
+    elif ftype == "audio":
+        meta = _extract_media_metadata(path)
+        if meta:
+            entry["media"] = meta
 
     return entry
 

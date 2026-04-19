@@ -794,7 +794,13 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
     multimedia: list = []
     documents: list = []
     metadata_entries: list = []
-    browser_history: list = []  # not inferable from a logical scan
+    # Local scan now *does* produce real browser history — scanner reads the
+    # Chrome/Edge/Firefox profile DBs via SQLite when present. We surface the
+    # flat list from findings["browser_history"] so the report's "Browser
+    # Artifacts" card has real rows instead of the old "not inferable" stub.
+    browser_history: list = list(findings.get("browser_history") or [])
+    # Videos with ffprobe-extracted metadata (codec / duration / resolution).
+    videos: list = list(findings.get("videos") or [])
     timeline_events: list = []
     deleted_files: list = []    # only available when we get a disk image
 
@@ -804,7 +810,10 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
             "path": f.get("path"),
             "name": f.get("name"),
             "size": f.get("size"),
+            # SHA-1 is carried alongside MD5/SHA-256 so the chain-of-custody
+            # table in the report can show all three (court-admissible).
             "md5": f.get("md5"),
+            "sha1": f.get("sha1"),
             "sha256": f.get("sha256"),
             "mtime": f.get("mtime"),
             "atime": f.get("atime"),
@@ -819,6 +828,15 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
                 metadata_entries.append({
                     "file": f.get("name"),
                     "metadata": entry["exif"],
+                })
+        elif ftype == "video":
+            entry["type"] = "video"
+            entry["media"] = f.get("media") or {}
+            multimedia.append(entry)
+            if entry["media"]:
+                metadata_entries.append({
+                    "file": f.get("name"),
+                    "metadata": entry["media"],
                 })
         elif ftype in {"pdf", "docx", "text"}:
             entry["type"] = ftype
@@ -835,6 +853,13 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
             entry["member_count"] = f.get("member_count", 0)
             entry["members_preview"] = (f.get("members") or [])[:10]
             documents.append(entry)
+        elif ftype == "browser_db":
+            # Stored as a document entry so the investigator can still see
+            # the source DB in the "Documents" tab — the real browser rows
+            # live in `browser_history` (populated above from findings).
+            entry["type"] = "browser_db"
+            entry["note"] = f.get("note") or f"Parsed {len(f.get('history_entries') or [])} history rows"
+            documents.append(entry)
 
         # ── Timeline: one event per MAC time, if present ────────────────────
         for macb, ts in (
@@ -850,36 +875,127 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
                     "size": f.get("size"),
                 })
 
+    # Browser-visit events feed the same timeline so the "Forensic Timeline"
+    # card shows a unified chronology (file I/O + web activity interleaved).
+    for h in browser_history:
+        ts = h.get("last_visit_at")
+        if not ts:
+            continue
+        timeline_events.append({
+            "timestamp": ts,
+            "action": "visited",
+            "file": h.get("url"),
+            "browser": h.get("browser"),
+            "title": h.get("title"),
+            "visit_count": h.get("visit_count"),
+        })
+
     timeline_events.sort(key=lambda e: e["timestamp"] or "")
 
-    # ── Keyword search across text previews ────────────────────────────────
+    # ── Keyword search across text previews + browser history ─────────────
+    # Searches both document text and visited URLs/titles. That's what makes
+    # the "Keyword Search" card surface things like @gmail.com in browser
+    # history even when there are no local docs containing that string.
     search_results: dict = {}
     for kw in (findings.get("keywords") or []):
         hits = []
         kw_l = kw.lower()
+        if not kw_l:
+            continue
         for f in files:
             haystack = " ".join(filter(None, [
                 f.get("text_preview", ""),
                 f.get("name", ""),
             ])).lower()
-            if kw_l and kw_l in haystack:
+            if kw_l in haystack:
                 hits.append({
                     "file": f.get("path"),
                     "match": f.get("name"),
                     "context": (f.get("text_preview", "") or "")[:200],
                 })
+        for h in browser_history:
+            haystack = " ".join(filter(None, [
+                h.get("url", ""), h.get("title", ""),
+            ])).lower()
+            if kw_l in haystack:
+                hits.append({
+                    "file": h.get("url"),
+                    "match": h.get("title") or h.get("url"),
+                    "context": f"Browser visit ({h.get('browser')}) — {h.get('title') or ''}",
+                })
         if hits:
             search_results[kw] = hits
 
-    # ── Chain-of-custody hash for the "root" — a hash of hashes ────────────
-    all_sha = [f.get("sha256") for f in files if f.get("sha256")]
+    # ── Chain-of-custody: roll-up hashes across all files ──────────────────
+    # We emit MD5 / SHA-1 / SHA-256 roll-ups (hash of sorted per-file hashes)
+    # so the integrity card in the report matches what the disk-image path
+    # produces via compute_hashes(). Sorting makes the roll-up stable
+    # regardless of file-walk order.
     import hashlib as _hashlib
-    roll = _hashlib.sha256("\n".join(all_sha).encode()).hexdigest() if all_sha else ""
+    def _rollup(digest_name: str, attr: str) -> str:
+        digests = sorted([f.get(attr) for f in files if f.get(attr)])
+        if not digests:
+            return ""
+        h = _hashlib.new(digest_name)
+        h.update("\n".join(digests).encode())
+        return h.hexdigest()
+
+    hashes_block = {
+        "md5":    _rollup("md5",    "md5"),
+        "sha1":   _rollup("sha1",   "sha1"),
+        "sha256": _rollup("sha256", "sha256"),
+        # Back-compat alias — older report templates read this key.
+        "sha256_of_contents": _rollup("sha256", "sha256"),
+        "file_count": len(files),
+        "algorithm_note": "Roll-up of sorted per-file digests (MD5/SHA-1/SHA-256).",
+    }
+
+    artifacts_block = {
+        "multimedia": multimedia,
+        "documents": documents,
+        "metadata": metadata_entries,
+        "browser_history": browser_history,
+        "videos": videos,
+    }
+
+    disk_results_block = {
+        "partitions": [],
+        "deleted_files": deleted_files,
+        "file_system": "logical",
+    }
+
+    # ── AI summary: try GPT first, fall back to local markdown ─────────────
+    # This mirrors how run_full_analysis does it (line ~227). The AISummarizer
+    # class reads OPENAI_API_KEY from the environment — if unset, or if the
+    # network call fails, we degrade gracefully to _local_summary_from_findings
+    # so the report never blocks on OpenAI availability.
+    evidence_name = os.path.basename(findings.get("root") or "logical_scan")
+    ai_summary = ""
+    try:
+        summarizer = AISummarizer()
+        ai_summary = summarizer.generate_summary({
+            "evidence_name": evidence_name,
+            "evidence_type": "logical_scan",
+            "hashes": hashes_block,
+            "disk_results": disk_results_block,
+            "artifacts": artifacts_block,
+            "timeline_count": len(timeline_events),
+            "search_results": search_results,
+            "recovered_count": len(files),
+        }) or ""
+    except Exception as e:
+        # Any failure (no key, quota, transient error) → local fallback.
+        print(f"[agent-findings] AI summary skipped: {e}")
+        ai_summary = ""
+    if not ai_summary.strip():
+        ai_summary = _local_summary_from_findings(
+            findings, len(files), timeline_events, search_results,
+        )
 
     return {
         "job_id": case_id,
         "case_id": case_id,
-        "evidence_name": os.path.basename(findings.get("root") or "logical_scan"),
+        "evidence_name": evidence_name,
         "evidence_type": "logical_scan",
         "status": "completed",
         "progress": 100,
@@ -891,25 +1007,13 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
         "host": host,
         "root": findings.get("root"),
         "keywords": findings.get("keywords", []),
-        "hashes": {
-            "sha256_of_contents": roll,
-            "file_count": len(files),
-        },
-        "disk_results": {
-            "partitions": [],
-            "deleted_files": deleted_files,
-            "file_system": "logical",
-        },
-        "artifacts": {
-            "multimedia": multimedia,
-            "documents": documents,
-            "metadata": metadata_entries,
-            "browser_history": browser_history,
-        },
+        "hashes": hashes_block,
+        "disk_results": disk_results_block,
+        "artifacts": artifacts_block,
         "timeline": timeline_events,
         "search_results": search_results,
         "recovered_count": len(files),
-        "ai_summary": _local_summary_from_findings(findings, len(files), timeline_events, search_results),
+        "ai_summary": ai_summary,
         "log": [f"[{datetime.now().strftime('%H:%M:%S')}] Remote scan ingested from agent"],
         "scanner_findings_sample": {
             "summary": summary,
@@ -926,6 +1030,11 @@ def _local_summary_from_findings(findings: dict, n_files: int, timeline: list, s
     by_type = summary.get("by_type", {})
     host = findings.get("host", {})
     flagged = [f"**{k}** ({len(v)} hits)" for k, v in search.items() if v]
+    browser_history = findings.get("browser_history") or []
+    videos = findings.get("videos") or []
+    n_hist = len(browser_history)
+    n_videos = len(videos)
+    disk_imgs = findings.get("images_to_upload") or []
     return f"""## Remote Agent Scan — {findings.get('root', 'unknown')}
 
 **Host:** {host.get('hostname', '?')} ({host.get('os', '?')}, user `{host.get('user', '?')}`)
@@ -938,15 +1047,22 @@ def _local_summary_from_findings(findings: dict, n_files: int, timeline: list, s
 - File types: {', '.join(f'{k}={v}' for k, v in by_type.items()) or '—'}
 - **{summary.get('with_exif', 0)}** files carry EXIF metadata
 - **{summary.get('with_text', 0)}** files had extractable text
-- **{len(timeline)}** timeline events (MAC times)
+- **{n_hist}** browser history rows extracted (Chrome / Edge / Firefox)
+- **{n_videos}** videos with probed metadata (codec / duration)
+- **{len(timeline)}** timeline events (MAC times + browser visits)
+- Integrity: MD5 / SHA-1 / SHA-256 computed per file in a single streaming pass.
 
 ### Keyword findings
 {('- ' + '; '.join(flagged)) if flagged else '- No keyword hits.'}
 
+### Disk images seen during scan
+{('- ' + chr(10).join('`' + p + '`' for p in disk_imgs)) if disk_imgs else '- None encountered.'}
+
 ### Next steps
-Review the file listing, timeline and keyword hits below. Disk images found
-during the scan were **not** analysed locally — re-run with
-`forensic-agent upload <disk.img>` to send them to the backend for Sleuth Kit.
+Review the file listing, timeline, browser-history and keyword hits below.
+Disk images found during the scan were **not** analysed locally — the GUI can
+auto-upload them to the backend for Sleuth Kit processing, or re-run with
+`forensic-agent upload <disk.img>` from the CLI.
 """
 
 

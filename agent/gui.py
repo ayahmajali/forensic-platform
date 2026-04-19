@@ -589,9 +589,19 @@ class ForensicAgentApp(ctk.CTk):
         )
         self._set_chip("● Submitting", COLOR_ACCENT)
 
+        # Only pass through the disk-image list if the user opted in. The
+        # checkbox lives on the summary panel and is built in _render_summary.
+        upload_images: bool = False
+        try:
+            upload_images = bool(getattr(self, "_opt_upload_images").get())
+        except Exception:
+            upload_images = False
+        disk_images = list(self._findings.get("images_to_upload") or []) \
+            if upload_images else []
+
         self._submit_thread = threading.Thread(
             target=self._submit_worker,
-            args=(url, key, self._findings),
+            args=(url, key, self._findings, disk_images),
             daemon=True,
         )
         self._submit_thread.start()
@@ -635,8 +645,29 @@ class ForensicAgentApp(ctk.CTk):
                 "error": f"{e}\n\n{traceback.format_exc()}",
             }))
 
-    def _submit_worker(self, url: str, key: str, findings: Dict[str, Any]) -> None:
+    def _submit_worker(
+        self,
+        url: str,
+        key: str,
+        findings: Dict[str, Any],
+        disk_images: Optional[list] = None,
+    ) -> None:
+        """
+        Two-phase submit:
+
+            1. POST findings JSON → /api/agent/findings          (small, fast)
+            2. For each opted-in disk image, POST the raw bytes →
+               /api/agent/upload                                  (large, slow)
+
+        Phase 2 is optional — only runs if the user ticked the auto-upload
+        checkbox in the summary panel. Each disk-image upload creates its
+        own case on the backend (Sleuth Kit needs to walk partitions / run
+        mmls, fsstat, fls, tsk_recover etc.), so we return those case IDs
+        alongside the logical-scan case ID for the case panel to render.
+        """
+        disk_images = list(disk_images or [])
         try:
+            # ── Phase 1: logical-scan findings ─────────────────────────
             headers = {
                 "X-API-Key": key,
                 "Content-Type": "application/json",
@@ -655,6 +686,65 @@ class ForensicAgentApp(ctk.CTk):
                 }))
                 return
             data = r.json()
+
+            # ── Phase 2: disk-image uploads (opt-in) ────────────────────
+            disk_cases: list = []
+            if disk_images:
+                # Per-upload progress so the user knows we haven't hung.
+                total = len(disk_images)
+                for i, img_path_str in enumerate(disk_images, 1):
+                    img_path = Path(img_path_str)
+                    if not img_path.exists():
+                        disk_cases.append({
+                            "path": img_path_str,
+                            "error": "File no longer exists on disk.",
+                        })
+                        continue
+                    try:
+                        self._q.put(("submit_progress", {
+                            "text": f"Uploading disk image {i}/{total}: "
+                                    f"{img_path.name} ({_fmt_size(img_path.stat().st_size)})…",
+                        }))
+                    except Exception:
+                        pass
+                    try:
+                        with img_path.open("rb") as fh:
+                            # Stream the file so we don't hold a multi-GB
+                            # image in memory. `requests` handles chunking
+                            # when `files=` is a file-like object.
+                            up = requests.post(
+                                f"{url}/api/agent/upload",
+                                headers={
+                                    "X-API-Key": key,
+                                    "User-Agent": f"forensic-agent-gui/{APP_VERSION}",
+                                },
+                                files={"evidence": (img_path.name, fh, "application/octet-stream")},
+                                data={
+                                    "keywords": ",".join(findings.get("keywords") or []) or "password,login,bitcoin,admin,secret",
+                                    "investigator": findings.get("investigator", "agent"),
+                                },
+                                # Big timeout for big files — backend needs
+                                # time to accept the multipart body. After
+                                # upload, TSK runs async in a bg task.
+                                timeout=60 * 30,  # 30 minutes
+                            )
+                        if up.status_code >= 400:
+                            disk_cases.append({
+                                "path": img_path_str,
+                                "error": f"HTTP {up.status_code}: {up.text[:200]}",
+                            })
+                        else:
+                            disk_cases.append({
+                                "path": img_path_str,
+                                **up.json(),
+                            })
+                    except Exception as ue:
+                        disk_cases.append({
+                            "path": img_path_str,
+                            "error": str(ue),
+                        })
+                data["disk_cases"] = disk_cases
+
             self._q.put(("submit_done", data))
         except Exception as e:
             self._q.put(("submit_error", {"error": str(e)}))
@@ -726,11 +816,24 @@ class ForensicAgentApp(ctk.CTk):
             self._set_chip("● Error", COLOR_DANGER)
             messagebox.showerror(APP_TITLE, f"Scan failed:\n\n{p['error']}")
 
+        elif name == "submit_progress":
+            # Fired during phase-2 disk image uploads so the user sees
+            # "Uploading 1/3: memory.e01 (2.4 GB)…" instead of a frozen UI.
+            self._lbl_submit_status.configure(
+                text=p.get("text", "Uploading…"),
+                text_color=COLOR_ACCENT,
+            )
+
         elif name == "submit_done":
             self._case_id = p.get("case_id")
             self._btn_submit.configure(state="normal", text="✓ Submitted")
+            n_disk = len(p.get("disk_cases") or [])
             self._lbl_submit_status.configure(
-                text="✓ Findings submitted.", text_color=COLOR_SUCCESS,
+                text=(
+                    f"✓ Findings submitted. {n_disk} disk-image case(s) queued."
+                    if n_disk else "✓ Findings submitted."
+                ),
+                text_color=COLOR_SUCCESS,
             )
             self._set_chip("● Done", COLOR_SUCCESS)
             self._render_case(p)
@@ -844,6 +947,9 @@ class ForensicAgentApp(ctk.CTk):
 
         # Disk images & RAR warnings
         imgs = findings.get("images_to_upload", [])
+        # Default: off — uploading a multi-GB disk image over a cold-start
+        # free-tier backend can time out. Investigator opts in explicitly.
+        self._opt_upload_images = ctk.BooleanVar(value=False)
         if imgs:
             box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
             box.pack(fill="x", pady=(4, 8))
@@ -851,7 +957,29 @@ class ForensicAgentApp(ctk.CTk):
                 box, text=f"💿  {len(imgs)} disk image(s) flagged for server-side TSK",
                 font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=COLOR_WARN,
-            ).pack(anchor="w", padx=12, pady=8)
+            ).pack(anchor="w", padx=12, pady=(8, 2))
+            # Detail rows so the user can see exactly *which* disk images
+            # the scanner found before agreeing to upload them.
+            for p in imgs[:5]:
+                ctk.CTkLabel(
+                    box, text=f"   • {p}",
+                    font=ctk.CTkFont(size=11, family="monospace"),
+                    text_color=COLOR_DIM,
+                ).pack(anchor="w", padx=12)
+            if len(imgs) > 5:
+                ctk.CTkLabel(
+                    box, text=f"   … and {len(imgs) - 5} more",
+                    font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
+                ).pack(anchor="w", padx=12)
+            ctk.CTkCheckBox(
+                box,
+                text="Also upload these disk images for Sleuth Kit analysis "
+                     "(may take several minutes)",
+                variable=self._opt_upload_images,
+                font=ctk.CTkFont(size=12),
+                text_color=COLOR_TEXT,
+                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            ).pack(anchor="w", padx=12, pady=(6, 10))
 
         errs = findings.get("errors", [])
         if errs:
@@ -1006,6 +1134,87 @@ class ForensicAgentApp(ctk.CTk):
             font=ctk.CTkFont(size=10, family="monospace"),
             text_color=COLOR_MUTED,
         ).pack(anchor="w", pady=(12, 0))
+
+        # ── Disk-image sub-cases ────────────────────────────────────────
+        # If the user opted into server-side TSK analysis, each disk image
+        # becomes its own case. Render them as a secondary list — status
+        # starts as "queued" and the backend processes them async via the
+        # `run_full_analysis` background task.
+        disk_cases = data.get("disk_cases") or []
+        if disk_cases:
+            ctk.CTkLabel(
+                self._case_body,
+                text=f"Disk images sent for Sleuth Kit analysis ({len(disk_cases)})",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=COLOR_DIM,
+            ).pack(anchor="w", pady=(20, 8))
+
+            for dc in disk_cases:
+                sub = ctk.CTkFrame(self._case_body, fg_color=COLOR_CARD, corner_radius=8)
+                sub.pack(fill="x", pady=(0, 8))
+
+                if "error" in dc:
+                    ctk.CTkLabel(
+                        sub,
+                        text=f"✗  {os.path.basename(dc.get('path', ''))}",
+                        font=ctk.CTkFont(size=12, weight="bold"),
+                        text_color=COLOR_DANGER,
+                    ).pack(anchor="w", padx=12, pady=(10, 0))
+                    ctk.CTkLabel(
+                        sub, text=dc["error"],
+                        font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
+                        wraplength=620, justify="left",
+                    ).pack(anchor="w", padx=12, pady=(0, 10))
+                    continue
+
+                sub_case_id = dc.get("case_id") or dc.get("job_id", "")
+                sub_case_url = f"{url}/results/{sub_case_id}"
+                sub_report_url = f"{url}/report/{sub_case_id}"
+
+                top = ctk.CTkFrame(sub, fg_color="transparent")
+                top.pack(fill="x", padx=12, pady=(10, 2))
+                ctk.CTkLabel(
+                    top,
+                    text=f"💿  {os.path.basename(dc.get('path', ''))}",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    text_color=COLOR_TEXT,
+                ).pack(side="left")
+                ctk.CTkLabel(
+                    top,
+                    text=f"  case {sub_case_id}",
+                    font=ctk.CTkFont(size=11, family="monospace"),
+                    text_color=COLOR_ACCENT,
+                ).pack(side="left")
+                ctk.CTkLabel(
+                    top,
+                    text=f"  · {dc.get('status', 'queued')}",
+                    font=ctk.CTkFont(size=11),
+                    text_color=COLOR_WARN,
+                ).pack(side="left")
+
+                btns = ctk.CTkFrame(sub, fg_color="transparent")
+                btns.pack(fill="x", padx=12, pady=(2, 10))
+                ctk.CTkButton(
+                    btns, text="Open in Browser", height=30, width=140,
+                    fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                    text_color="white", font=ctk.CTkFont(size=11, weight="bold"),
+                    command=lambda u=sub_case_url: webbrowser.open(u),
+                ).pack(side="left", padx=(0, 6))
+                ctk.CTkButton(
+                    btns, text="Download PDF", height=30, width=120,
+                    fg_color=COLOR_BG, hover_color=COLOR_PANEL,
+                    text_color=COLOR_TEXT, font=ctk.CTkFont(size=11, weight="bold"),
+                    command=lambda u=sub_report_url: webbrowser.open(u),
+                ).pack(side="left")
+
+            ctk.CTkLabel(
+                self._case_body,
+                text="Sleuth Kit runs asynchronously on the backend — "
+                     "refresh the case page in a minute or two if analysis "
+                     "is still queued.",
+                font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
+                wraplength=640, justify="left",
+            ).pack(anchor="w", pady=(6, 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
