@@ -252,19 +252,20 @@
   </a>
   <div class="nav-spacer"></div>
   <a href="/" class="btn btn-ghost"><i class="fas fa-home"></i>&nbsp; Home</a>
-  <a href="#install" class="btn btn-primary"><i class="fas fa-terminal"></i>&nbsp; Install Guide</a>
+  <a href="#install" class="btn btn-primary"><i class="fas fa-wand-magic-sparkles"></i>&nbsp; Install Guide</a>
 </nav>
 
 <!-- Hero -->
 <section class="hero">
   <div class="hero-inner">
-    <div class="badge"><i class="fas fa-shield-alt"></i> Cross-platform · Open source</div>
+    <div class="badge"><i class="fas fa-shield-alt"></i> Desktop app · macOS &amp; Windows</div>
     <h1>Download the <span class="hl">ForensicPlatform Agent</span></h1>
     <p>
-      A lightweight CLI tool that scans a folder or disk image on your computer,
-      hashes every file, extracts metadata, and sends a compact findings package
-      to this platform for reporting. Raw evidence never leaves your machine
-      unless you explicitly opt in.
+      A native desktop application that scans a folder or disk image on your
+      computer, hashes every file, extracts metadata, and sends a compact findings
+      package to this platform for reporting. No terminal — just pick a folder
+      and click <strong>Start Scan</strong>. Raw evidence never leaves your
+      machine unless you explicitly opt in.
     </p>
   </div>
 </section>
@@ -278,20 +279,20 @@
         <div class="dl-icon"><i class="fab fa-apple"></i></div>
         <div>
           <div class="dl-title">macOS (Intel &amp; Apple Silicon)</div>
-          <div class="dl-sub">Single-file binary · macOS 11+</div>
+          <div class="dl-sub">Native .app bundle · macOS 11+</div>
         </div>
       </div>
       <div class="dl-body">
         <div class="dl-meta">
-          <span>universal2</span>
-          <span>~18 MB</span>
+          <span>desktop app</span>
+          <span>~25 MB</span>
           <span>no admin required</span>
         </div>
         <a class="dl-btn" href="/api/agent/download/macos">
           <i class="fas fa-download"></i> Download for macOS
         </a>
         <div class="dl-alt">
-          or install from source: <a href="#install">follow the CLI instructions</a>
+          Downloads as <code>ForensicAgent-macos.zip</code>. Unzip and double-click <strong>ForensicAgent.app</strong>.
         </div>
       </div>
     </div>
@@ -307,19 +308,38 @@
       </div>
       <div class="dl-body">
         <div class="dl-meta">
-          <span>x86_64</span>
-          <span>~22 MB</span>
+          <span>desktop app</span>
+          <span>~28 MB</span>
           <span>no admin required</span>
         </div>
         <a class="dl-btn" href="/api/agent/download/windows">
           <i class="fas fa-download"></i> Download for Windows
         </a>
         <div class="dl-alt">
-          or install from source: <a href="#install">follow the CLI instructions</a>
+          Double-click <strong>ForensicAgent-windows.exe</strong>. If SmartScreen warns, click <em>More info → Run anyway</em>.
         </div>
       </div>
     </div>
   </div>
+
+  <!-- Advanced: CLI binaries -->
+  <details style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;color:var(--text-muted);font-size:13px">
+    <summary style="cursor:pointer;color:var(--text);font-weight:700">
+      <i class="fas fa-terminal"></i>&nbsp; Prefer the command line?
+    </summary>
+    <p style="margin-top:10px;line-height:1.6">
+      A headless CLI binary is also available for automation, CI pipelines, or investigators
+      who already live in a terminal. It runs the same scanner core as the desktop app.
+    </p>
+    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <a href="/api/agent/download/macos-cli" class="dl-btn" style="flex:0 0 auto;padding:10px 16px">
+        <i class="fab fa-apple"></i>&nbsp; CLI binary (macOS)
+      </a>
+      <a href="/api/agent/download/windows-cli" class="dl-btn" style="flex:0 0 auto;padding:10px 16px">
+        <i class="fab fa-windows"></i>&nbsp; CLI binary (Windows)
+      </a>
+    </div>
+  </details>
 
   <!-- Supported file types -->
   <div class="section-h"><i class="fas fa-list-check"></i> What the agent scans</div>
@@ -373,7 +393,7 @@
   </div>
 
   <!-- Install / Usage instructions -->
-  <div id="install" class="section-h"><i class="fas fa-terminal"></i> Install &amp; run the agent</div>
+  <div id="install" class="section-h"><i class="fas fa-wand-magic-sparkles"></i> Install &amp; run the agent</div>
   <div class="panel">
     <div class="tabs">
       <button class="tab active" data-tab="mac" onclick="showTab(event,'mac')"><i class="fab fa-apple"></i>&nbsp; macOS</button>
@@ -385,37 +405,48 @@
     <div id="mac" class="tab-panel active">
       <ol class="steps">
         <li>
-          <strong>Download</strong> the macOS binary above and make it executable:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">chmod</span> +x ~/Downloads/forensic-agent-macos
-<span class="k">sudo mv</span> ~/Downloads/forensic-agent-macos /usr/local/bin/forensic-agent</code></pre>
+          <strong>Download</strong> <code>ForensicAgent-macos.zip</code> using the
+          button above, then <strong>double-click the zip</strong> in Finder to
+          extract <strong>ForensicAgent.app</strong>.
         </li>
         <li>
-          <strong>Configure the connection</strong> — set the backend URL and your agent key:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">export</span> FORENSIC_API_URL=<span class="s">"<span id="api-url-mac">http://localhost:8000</span>"</span>
-<span class="k">export</span> FORENSIC_API_KEY=<span class="s">"&lt;paste the AGENT_API_KEY your admin gave you&gt;"</span></code></pre>
-          <div class="info"><i class="fas fa-info-circle"></i>
-            Add those two lines to <code>~/.zshrc</code> so they persist across terminals.
+          <strong>Launch the app</strong> — double-click <code>ForensicAgent.app</code>.
+          If macOS says <em>"cannot be opened because the developer cannot be
+          verified"</em>, right-click the app → <em>Open</em> → <em>Open</em> once.
+          This only happens on first launch.
+          <div class="info" style="margin-top:10px"><i class="fas fa-info-circle"></i>
+            If right-click → Open still refuses, run this once in Terminal to clear
+            Apple's quarantine flag:
+            <pre style="margin-top:8px"><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">xattr</span> -dr com.apple.quarantine /Applications/ForensicAgent.app</code></pre>
           </div>
         </li>
         <li>
-          <strong>Scan a folder locally</strong> — nothing leaves your machine
-          except the findings JSON:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>forensic-agent scan ~/Documents/<span class="s">SuspiciousFolder</span> --watch
-<span class="c"># open the case in your browser when done:</span>
-<span class="k">open</span> $FORENSIC_API_URL/results/&lt;CASE_ID&gt;</code></pre>
+          <strong>Fill in the connection fields</strong> — the app pre-fills the
+          backend URL with <code><span id="api-url-mac">https://forensic-site.onrender.com</span></code>.
+          Paste the <strong>Agent API Key</strong> your admin gave you into the
+          <em>API Key</em> field and click <strong>Test Connection</strong>.
         </li>
         <li>
-          <strong>Uploading a disk image</strong> (E01, DD, RAW…) for Sleuth Kit:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>forensic-agent upload ~/Evidence/disk.e01 --watch --download-report ./case.pdf</code></pre>
+          <strong>Pick a folder to scan</strong> with the <em>Choose Folder…</em>
+          button, then hit <strong>▶ Start Scan</strong>. Watch the progress bar;
+          if the folder contains <code>.rar</code> archives you'll get a dialog
+          asking whether to include them.
+        </li>
+        <li>
+          <strong>Submit &amp; review</strong> — when the scan finishes you'll
+          see a file-type breakdown. Click <strong>Submit to Backend</strong> and
+          your Case ID appears. Click <strong>🌐 Open Case in Browser</strong> to
+          see the full report on this website.
         </li>
       </ol>
       <div class="note" style="margin-top:14px">
-        <i class="fas fa-exclamation-triangle"></i>
+        <i class="fas fa-shield-alt"></i>
         <div>
-          First launch may show “cannot be opened because the developer cannot
-          be verified”. Run
-          <code>xattr -dr com.apple.quarantine /usr/local/bin/forensic-agent</code>
-          to clear the quarantine flag, or right-click → <em>Open</em> once.
+          Nothing inside the scanned folder is ever uploaded — only the JSON
+          findings (hashes, metadata, file list). Disk images like
+          <code>.e01</code> / <code>.dd</code> are the one exception and are
+          flagged in the summary so you can decide whether to upload them
+          separately for Sleuth Kit processing.
         </div>
       </div>
     </div>
@@ -424,34 +455,45 @@
     <div id="win" class="tab-panel">
       <ol class="steps">
         <li>
-          <strong>Download</strong> <code>forensic-agent-windows.exe</code> and drop
-          it in a folder on your PATH (e.g. <code>C:\Tools\</code>).
+          <strong>Download</strong> <code>ForensicAgent-windows.exe</code> using
+          the button above.
         </li>
         <li>
-          <strong>Configure the connection</strong> in PowerShell:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">$env:</span>FORENSIC_API_URL = <span class="s">"<span id="api-url-win">http://localhost:8000</span>"</span>
-<span class="k">$env:</span>FORENSIC_API_KEY = <span class="s">"&lt;paste the AGENT_API_KEY your admin gave you&gt;"</span></code></pre>
-          <div class="info"><i class="fas fa-info-circle"></i>
-            To persist them permanently, open <em>Edit environment variables for your account</em>
-            from the Start menu and add them there.
+          <strong>Double-click the .exe</strong>. If Windows SmartScreen warns
+          <em>"Windows protected your PC"</em>, click
+          <strong>More info → Run anyway</strong>. The binary is unsigned
+          because this is an academic project — you can inspect or rebuild it
+          from source any time.
+          <div class="info" style="margin-top:10px"><i class="fas fa-info-circle"></i>
+            A native window titled <strong>Forensic Agent 1.0.0</strong> will
+            open. No terminal, no PowerShell, no environment variables.
           </div>
         </li>
         <li>
-          <strong>Scan a folder locally</strong>:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>C:\Tools\forensic-agent-windows.exe scan C:\Users\You\Documents\SuspiciousFolder --watch</code></pre>
+          <strong>Fill in the connection fields</strong> — the app pre-fills the
+          backend URL with <code><span id="api-url-win">https://forensic-site.onrender.com</span></code>.
+          Paste the <strong>Agent API Key</strong> into the <em>API Key</em>
+          field and click <strong>Test Connection</strong>.
         </li>
         <li>
-          <strong>Uploading a disk image</strong>:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>C:\Tools\forensic-agent-windows.exe upload D:\Evidence\disk.e01 --watch --download-report .\case.pdf</code></pre>
+          <strong>Pick a folder</strong> with <em>Choose Folder…</em> (for
+          example <code>C:\Users\You\Documents\SuspiciousFolder</code>), then
+          click <strong>▶ Start Scan</strong>.
+        </li>
+        <li>
+          <strong>Submit &amp; review</strong> — when the scan finishes, click
+          <strong>Submit to Backend</strong>. Your Case ID appears with a
+          <strong>🌐 Open Case in Browser</strong> button that takes you
+          straight to the report.
         </li>
       </ol>
       <div class="note" style="margin-top:14px">
         <i class="fas fa-shield-alt"></i>
         <div>
-          Windows SmartScreen may flag the download the first time. Click
-          <em>More info → Run anyway</em>. The binary is unsigned because this
-          is an academic project — inspect the source if you want to build it
-          yourself.
+          The app never uploads raw file contents — it only POSTs a JSON
+          findings document to <code>/api/agent/findings</code>. Disk images
+          (<code>.e01</code>, <code>.dd</code>, <code>.raw</code>, …) are
+          flagged in the summary for optional server-side processing.
         </div>
       </div>
     </div>
@@ -472,34 +514,43 @@
           <strong>Install into a virtual environment</strong>:
           <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">python3</span> -m venv .venv-agent
 <span class="k">source</span> .venv-agent/bin/activate  <span class="c"># Windows: .venv-agent\Scripts\Activate.ps1</span>
-<span class="k">pip install</span> -e .</code></pre>
+<span class="k">pip install</span> -r requirements.txt</code></pre>
         </li>
         <li>
-          <strong>Run the scan</strong> — same commands as the binary:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code>forensic-agent scan /path/to/folder --watch --download-report ./case.pdf</code></pre>
+          <strong>Launch the GUI</strong> — exactly what the downloadable
+          binary does, just from source:
+          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">python</span> forensic_agent_gui.py</code></pre>
         </li>
         <li>
-          <strong>Optional extras</strong> — richer parsing:
-          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="c"># PDF text extraction</span>
-<span class="k">pip install</span> pypdf
-
-<span class="c"># DOCX text extraction</span>
-<span class="k">pip install</span> python-docx
-
-<span class="c"># Image EXIF (exiftool binary, not pip)</span>
+          <strong>Or use the CLI</strong> — useful for automation, CI
+          pipelines, or when scanning over SSH:
+          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">python</span> forensic_agent.py scan /path/to/folder --watch --download-report ./case.pdf</code></pre>
+        </li>
+        <li>
+          <strong>Build your own .app / .exe</strong>:
+          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="c"># macOS</span>
+<span class="k">chmod</span> +x build_macos.sh &amp;&amp; ./build_macos.sh
+<span class="c"># Windows (PowerShell or cmd)</span>
+.\build_windows.bat</code></pre>
+        </li>
+        <li>
+          <strong>Optional extras</strong> — richer parsing (install these
+          alongside <code>requirements.txt</code> and the scanner picks them up
+          automatically):
+          <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="c"># Image EXIF needs the exiftool binary, not pip</span>
 <span class="k">brew install</span> exiftool      <span class="c"># macOS</span>
 <span class="k">choco install</span> exiftool    <span class="c"># Windows w/ Chocolatey</span>
 
-<span class="c"># RAR archive reading (opt-in; agent will prompt)</span>
-<span class="k">pip install</span> rarfile
-<span class="k">brew install</span> rar          <span class="c"># macOS</span></code></pre>
+<span class="c"># RAR archive reading (the scanner will prompt)</span>
+<span class="k">brew install</span> rar          <span class="c"># macOS</span>
+<span class="c"># Windows: install WinRAR from rarlab.com</span></code></pre>
         </li>
       </ol>
     </div>
   </div>
 
   <!-- CLI reference -->
-  <div class="section-h"><i class="fas fa-book"></i> CLI reference</div>
+  <div class="section-h"><i class="fas fa-terminal"></i> CLI reference <span style="font-size:12px;font-weight:500;color:var(--text-muted);margin-left:10px">— power users only; the desktop app does all of this with clicks</span></div>
   <div class="panel">
     <pre><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="c"># Health check</span>
 forensic-agent health

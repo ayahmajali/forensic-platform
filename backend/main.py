@@ -1012,21 +1012,26 @@ async def download_agent_binary(platform_name: str):
     ``backend/static/downloads/`` before deployment.
     """
     mapping = {
-        "macos":   ("forensic-agent-macos",   "application/octet-stream"),
-        "windows": ("forensic-agent-windows.exe", "application/octet-stream"),
-        "source":  ("forensic-agent-source.zip", "application/zip"),
+        # GUI desktop app — the default download (double-clickable).
+        "macos":         ("ForensicAgent-macos.zip",     "application/zip"),
+        "windows":       ("ForensicAgent-windows.exe",   "application/octet-stream"),
+        # CLI binaries — for power users, exposed in the "Advanced" section.
+        "macos-cli":     ("forensic-agent-macos",        "application/octet-stream"),
+        "windows-cli":   ("forensic-agent-windows.exe",  "application/octet-stream"),
+        # Source archive — for the "From source" tab.
+        "source":        ("forensic-agent-source.zip",   "application/zip"),
     }
     if platform_name not in mapping:
         raise HTTPException(status_code=404, detail="Unknown platform")
     fname, mime = mapping[platform_name]
     fpath = STATIC_DIR / "downloads" / fname
     if not fpath.exists():
+        hint_script = "build_macos.sh" if "macos" in platform_name else "build_windows.bat"
         raise HTTPException(
             status_code=404,
             detail=(
-                f"{fname} not built yet. Run agent/build_{platform_name}.sh "
-                "(or build_windows.bat) on the matching OS and place the binary "
-                "in backend/static/downloads/."
+                f"{fname} not built yet. Run agent/{hint_script} on the matching "
+                f"OS and place the artefact in backend/static/downloads/."
             ),
         )
     return FileResponse(path=str(fpath), media_type=mime, filename=fname)

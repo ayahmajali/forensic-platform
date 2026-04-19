@@ -1,3 +1,12 @@
 click>=8.1.0
 requests>=2.31.0
 tqdm>=4.66.0
+
+# GUI (CustomTkinter is Tkinter-based, so no extra native toolkit is needed)
+customtkinter>=5.2.2
+Pillow>=10.0.0
+
+# Optional parsers — the scanner degrades gracefully if these are missing
+pypdf>=4.0.0
+python-docx>=1.0.0
+rarfile>=4.1

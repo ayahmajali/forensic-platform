@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-# build_macos.sh — Build a single-file macOS binary for the forensic agent.
+# build_macos.sh — Build both the GUI .app and the CLI binary for macOS.
 #
-# Produces:  dist/forensic-agent-macos
-# Copies to: ../backend/static/downloads/forensic-agent-macos
+# Produces:
+#   dist/ForensicAgent.app              — the double-clickable GUI app
+#   dist/forensic-agent-macos           — the CLI binary (for power users)
+# Copies to:
+#   ../backend/static/downloads/
 #
 # Usage:
 #   chmod +x build_macos.sh
 #   ./build_macos.sh
 #
 # Prerequisites:
-#   - macOS 11+ (either Intel or Apple Silicon; the result is architecture-
-#     specific — build on both and merge with `lipo -create` for universal2)
+#   - macOS 11+ (result is architecture-specific; merge with `lipo` for universal2)
 #   - Python 3.11 from Homebrew or python.org
-#   - `brew install exiftool` (optional, enables EXIF in the built binary —
-#     but note: exiftool is NOT bundled; users install it separately)
+#   - (Optional) brew install exiftool  → richer EXIF extraction at scan time
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 echo "▶ Locating a usable Python ..."
-# Prefer 3.11 (matches the backend), fall back to whatever `python3` resolves to.
 PYBIN=""
 for cand in python3.11 python3.12 python3.10 python3; do
   if command -v "$cand" >/dev/null 2>&1; then
@@ -44,35 +44,71 @@ echo "▶ Installing dependencies ..."
 pip install --upgrade pip wheel
 pip install -r requirements.txt
 pip install pyinstaller
-# Optional richer parsers so the frozen binary can handle them out of the box.
-pip install pypdf python-docx rarfile || true
 
-echo "▶ Running PyInstaller ..."
+echo "▶ Wiping previous build artefacts ..."
 rm -rf build dist
+
+# ── Common PyInstaller options ─────────────────────────────────────────────
+COMMON_OPTS=(
+  --onefile
+  --collect-submodules click
+  --collect-submodules requests
+  --collect-submodules tqdm
+  --collect-submodules multiprocessing
+  --collect-submodules customtkinter
+  --hidden-import scanner
+  --hidden-import pypdf
+  --hidden-import docx
+  --hidden-import rarfile
+  --hidden-import _socket
+  --hidden-import socket
+  --hidden-import ssl
+  --hidden-import _ssl
+  --hidden-import select
+  --hidden-import _queue
+  --clean
+  --noconfirm
+)
+
+# ── 1) GUI .app bundle ─────────────────────────────────────────────────────
+echo "▶ Building GUI app (ForensicAgent.app) ..."
 pyinstaller \
-  --onefile \
+  "${COMMON_OPTS[@]}" \
+  --windowed \
+  --name "ForensicAgent" \
+  --osx-bundle-identifier "com.forensicplatform.agent" \
+  forensic_agent_gui.py
+
+# ── 2) CLI binary ──────────────────────────────────────────────────────────
+echo "▶ Building CLI binary (forensic-agent-macos) ..."
+pyinstaller \
+  "${COMMON_OPTS[@]}" \
   --name forensic-agent-macos \
-  --collect-submodules click \
-  --collect-submodules requests \
-  --collect-submodules tqdm \
-  --hidden-import scanner \
-  --hidden-import pypdf \
-  --hidden-import docx \
-  --hidden-import rarfile \
-  --clean \
-  --noconfirm \
   forensic_agent.py
 
-echo "▶ Copying binary to backend/static/downloads ..."
+# ── Publish to backend/static/downloads ────────────────────────────────────
 DEST="../backend/static/downloads"
 mkdir -p "$DEST"
-cp dist/forensic-agent-macos "$DEST/forensic-agent-macos"
-chmod +x "$DEST/forensic-agent-macos"
 
-# Also pack a source zip for the "From source" tab on the download page.
+echo "▶ Zipping the .app bundle (macOS Gatekeeper needs this for downloads) ..."
+if [ -d "dist/ForensicAgent.app" ]; then
+  (cd dist && zip -qr "../ForensicAgent-macos.zip" "ForensicAgent.app")
+  mv ForensicAgent-macos.zip "$DEST/ForensicAgent-macos.zip"
+  echo "   ✓ Published $DEST/ForensicAgent-macos.zip"
+fi
+
+if [ -f "dist/forensic-agent-macos" ]; then
+  cp "dist/forensic-agent-macos" "$DEST/forensic-agent-macos"
+  chmod +x "$DEST/forensic-agent-macos"
+  echo "   ✓ Published $DEST/forensic-agent-macos"
+fi
+
+# Source zip (for the "From source" tab on the download page)
 echo "▶ Packing source archive ..."
 (cd .. && zip -rq "backend/static/downloads/forensic-agent-source.zip" \
      agent/forensic_agent.py \
+     agent/forensic_agent_gui.py \
+     agent/gui.py \
      agent/scanner.py \
      agent/setup.py \
      agent/requirements.txt \
@@ -80,8 +116,12 @@ echo "▶ Packing source archive ..."
 
 echo ""
 echo "✅ Done."
-echo "   Binary:    dist/forensic-agent-macos ($(du -h dist/forensic-agent-macos | cut -f1))"
-echo "   Published: $DEST/forensic-agent-macos"
+echo "   GUI app:      dist/ForensicAgent.app"
+echo "   GUI zip:      $DEST/ForensicAgent-macos.zip"
+echo "   CLI binary:   $DEST/forensic-agent-macos"
 echo ""
-echo "   Test it:"
+echo "   Test the GUI:"
+echo "     open dist/ForensicAgent.app"
+echo ""
+echo "   Test the CLI:"
 echo "     ./dist/forensic-agent-macos --help"
