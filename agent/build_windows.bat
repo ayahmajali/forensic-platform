@@ -85,6 +85,12 @@ echo  Copying binaries to backend\static\downloads ...
 if exist dist\ForensicAgent.exe copy /Y dist\ForensicAgent.exe ..\backend\static\downloads\ForensicAgent-windows.exe
 if exist dist\forensic-agent-windows.exe copy /Y dist\forensic-agent-windows.exe ..\backend\static\downloads\forensic-agent-windows.exe
 
+REM Strip the Mark-of-the-Web (Zone.Identifier stream) added by the browser
+REM when the source was downloaded from a zip. Doesn't bypass SmartScreen
+REM (that needs a paid code-signing cert) but cleans up LAN/internal copies.
+powershell -NoProfile -Command ^
+  "Get-ChildItem '..\backend\static\downloads\*.exe' | ForEach-Object { Unblock-File -Path $_.FullName }"
+
 echo  Packing source archive ...
 powershell -NoProfile -Command ^
   "Compress-Archive -Force -Path ../agent/forensic_agent.py, ../agent/forensic_agent_gui.py, ../agent/gui.py, ../agent/scanner.py, ../agent/setup.py, ../agent/requirements.txt, ../agent/README.md -DestinationPath ../backend/static/downloads/forensic-agent-source.zip"

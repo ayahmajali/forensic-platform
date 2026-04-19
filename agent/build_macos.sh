@@ -86,20 +86,47 @@ pyinstaller \
   --name forensic-agent-macos \
   forensic_agent.py
 
+# ── 3) Ad-hoc code signing ─────────────────────────────────────────────────
+# Unsigned apps trigger Gatekeeper ("cannot be opened because the developer
+# cannot be verified") on first launch. A real Apple signature requires a
+# $99/year Developer ID — overkill for a graduation project. The ad-hoc
+# signature below satisfies macOS's integrity check enough that the
+# right-click → Open flow works, and keeps the app openable after System
+# Integrity Protection's validation.
+if [ -d "dist/ForensicAgent.app" ]; then
+  echo "▶ Ad-hoc signing ForensicAgent.app ..."
+  # Strip any quarantine flags the build may have picked up.
+  xattr -cr "dist/ForensicAgent.app" 2>/dev/null || true
+  codesign --force --deep --sign - "dist/ForensicAgent.app" \
+      2>/dev/null || echo "   (codesign not available — skipping)"
+fi
+if [ -f "dist/forensic-agent-macos" ]; then
+  echo "▶ Ad-hoc signing forensic-agent-macos ..."
+  xattr -cr "dist/forensic-agent-macos" 2>/dev/null || true
+  codesign --force --sign - "dist/forensic-agent-macos" \
+      2>/dev/null || echo "   (codesign not available — skipping)"
+fi
+
 # ── Publish to backend/static/downloads ────────────────────────────────────
 DEST="../backend/static/downloads"
 mkdir -p "$DEST"
 
-echo "▶ Zipping the .app bundle (macOS Gatekeeper needs this for downloads) ..."
+# Use `ditto` (Apple's archiver) instead of `zip`. Plain `zip` corrupts
+# extended attributes, symlinks, and the ad-hoc signature we just applied,
+# which re-triggers Gatekeeper after download. `ditto -c -k` preserves all
+# of it and produces an archive Finder can unzip into a runnable .app.
 if [ -d "dist/ForensicAgent.app" ]; then
-  (cd dist && zip -qr "../ForensicAgent-macos.zip" "ForensicAgent.app")
-  mv ForensicAgent-macos.zip "$DEST/ForensicAgent-macos.zip"
+  echo "▶ Archiving app bundle with ditto (preserves signature + xattrs) ..."
+  rm -f "$DEST/ForensicAgent-macos.zip"
+  ditto -c -k --sequesterRsrc --keepParent \
+      "dist/ForensicAgent.app" "$DEST/ForensicAgent-macos.zip"
   echo "   ✓ Published $DEST/ForensicAgent-macos.zip"
 fi
 
 if [ -f "dist/forensic-agent-macos" ]; then
   cp "dist/forensic-agent-macos" "$DEST/forensic-agent-macos"
   chmod +x "$DEST/forensic-agent-macos"
+  xattr -cr "$DEST/forensic-agent-macos" 2>/dev/null || true
   echo "   ✓ Published $DEST/forensic-agent-macos"
 fi
 

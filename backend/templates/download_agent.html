@@ -410,14 +410,28 @@
           extract <strong>ForensicAgent.app</strong>.
         </li>
         <li>
-          <strong>Launch the app</strong> — double-click <code>ForensicAgent.app</code>.
-          If macOS says <em>"cannot be opened because the developer cannot be
-          verified"</em>, right-click the app → <em>Open</em> → <em>Open</em> once.
-          This only happens on first launch.
+          <strong>Drag <code>ForensicAgent.app</code> into your Applications folder</strong>
+          (or anywhere you like — this is just so Spotlight can find it later).
+        </li>
+        <li>
+          <strong>Launch the app</strong>. Because the app isn't signed with
+          a paid $99/year Apple Developer certificate, macOS Gatekeeper will
+          block the first launch with one of these dialogs:
+          <ul style="margin-top:8px;margin-bottom:8px;color:var(--text-muted);font-size:13px">
+            <li><em>"ForensicAgent cannot be opened because the developer cannot be verified"</em></li>
+            <li><em>"macOS cannot verify that this app is free of malware"</em></li>
+          </ul>
+          <strong>Fix it once with this one-liner in Terminal</strong> — then
+          double-click and it'll open every time afterwards:
+          <pre style="margin-top:8px"><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="c"># Adjust the path if you put the app somewhere other than /Applications</span>
+<span class="k">xattr</span> -cr /Applications/ForensicAgent.app
+<span class="k">codesign</span> --force --deep --sign - /Applications/ForensicAgent.app</code></pre>
           <div class="info" style="margin-top:10px"><i class="fas fa-info-circle"></i>
-            If right-click → Open still refuses, run this once in Terminal to clear
-            Apple's quarantine flag:
-            <pre style="margin-top:8px"><button class="copy-btn" onclick="copyPre(this)">Copy</button><code><span class="k">xattr</span> -dr com.apple.quarantine /Applications/ForensicAgent.app</code></pre>
+            <code>xattr -cr</code> strips the <em>com.apple.quarantine</em> flag
+            Safari/Chrome add to every downloaded file. <code>codesign --sign -</code>
+            applies an <em>ad-hoc signature</em> — not a real Apple one, but
+            enough to satisfy Gatekeeper's integrity check. Neither of these
+            requires admin privileges; a forensic scanner shouldn't need them.
           </div>
         </li>
         <li>
