@@ -197,6 +197,64 @@
     .integrity-details .hash{color:var(--ink)}
     .integrity-foot{margin-top:10px;font-size:11px;color:var(--muted);font-family:'Inter',sans-serif}
 
+    /* ── Disk analysis (TSK / Sleuth Kit) ──────────────────── */
+    .disk-grid{
+      display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;
+    }
+    .disk-stat{
+      background:var(--cream);border:1px solid var(--line);border-radius:6px;
+      padding:14px 16px;
+    }
+    .disk-stat .lbl{
+      font-size:10px;text-transform:uppercase;letter-spacing:.14em;
+      color:var(--muted);margin-bottom:4px;
+    }
+    .disk-stat .val{
+      font-family:'Playfair Display',serif;
+      font-size:18px;font-weight:600;color:var(--navy);
+      word-break:break-word;
+    }
+    .disk-sub{
+      border:1px solid var(--line);border-radius:6px;padding:18px 20px;
+      background:#fff;margin-bottom:14px;
+    }
+    .disk-sub h4{
+      font-family:'Playfair Display',serif;
+      color:var(--navy);font-weight:600;font-size:15px;
+      margin-bottom:10px;
+    }
+    .part-table{
+      width:100%;border-collapse:collapse;font-size:12.5px;
+    }
+    .part-table th,.part-table td{
+      padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;
+    }
+    .part-table th{
+      font-size:10px;text-transform:uppercase;letter-spacing:.1em;
+      color:var(--muted);font-weight:500;
+    }
+    .part-table td{color:var(--ink-soft)}
+    .part-table td.num{
+      font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;
+      text-align:right;font-variant-numeric:tabular-nums;
+    }
+    .deleted-list{list-style:none;columns:2;column-gap:24px}
+    .deleted-list li{
+      padding:6px 0;font-size:13px;color:var(--ink-soft);
+      break-inside:avoid;display:flex;justify-content:space-between;gap:10px;
+      border-bottom:1px dashed var(--line);
+    }
+    .deleted-list li .pri{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+    .deleted-list li .ino{
+      font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;
+      font-size:11px;color:var(--muted);
+    }
+    .disk-warn{
+      padding:14px 18px;border-left:3px solid var(--warn);
+      background:var(--warn-soft);color:var(--warn);border-radius:3px;
+      font-size:13.5px;
+    }
+
     /* ── Findings cards ─────────────────────────────────── */
     .cards-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
     .card{
@@ -512,10 +570,95 @@
         </div>
       </section>
 
-      <!-- ════ 4. Key Findings ════ -->
+      <!-- ════ 4. Disk Image Analysis (TSK) ════ -->
+      {# Only renders for disk-image cases — logical scans skip this section #}
+      {% if view.disk_analysis %}
       <section>
         <div class="sec-head">
           <div class="sec-num">IV.</div>
+          <div class="sec-title">Disk Image Analysis</div>
+        </div>
+
+        {% if view.disk_analysis.error %}
+          <div class="disk-warn">
+            <strong>Disk analysis unavailable:</strong> {{ view.disk_analysis.error }}
+          </div>
+        {% else %}
+          {# ── Filesystem stats — high level summary ───────────────── #}
+          <div class="disk-grid">
+            <div class="disk-stat">
+              <div class="lbl">File System</div>
+              <div class="val">{{ view.disk_analysis.fs_type }}</div>
+            </div>
+            <div class="disk-stat">
+              <div class="lbl">Partitions</div>
+              <div class="val">{{ view.disk_analysis.partition_count }}</div>
+            </div>
+            <div class="disk-stat">
+              <div class="lbl">Files Listed</div>
+              <div class="val">{{ "{:,}".format(view.disk_analysis.total_files) }}</div>
+            </div>
+            <div class="disk-stat">
+              <div class="lbl">Deleted Recovered</div>
+              <div class="val">{{ "{:,}".format(view.disk_analysis.total_deleted) }}</div>
+            </div>
+          </div>
+
+          {# ── Partition table from mmls ───────────────────────────── #}
+          {% if view.disk_analysis.partitions %}
+          <div class="disk-sub">
+            <h4>Partition Layout</h4>
+            <table class="part-table">
+              <thead>
+                <tr>
+                  <th>Slot</th>
+                  <th>Description</th>
+                  <th style="text-align:right">Start (sector)</th>
+                  <th style="text-align:right">Length</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in view.disk_analysis.partitions %}
+                  <tr>
+                    <td>{{ p.slot }}</td>
+                    <td>{{ p.description }}</td>
+                    <td class="num">{{ "{:,}".format(p.start) }}</td>
+                    <td class="num">{{ "{:,}".format(p.length) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% endif %}
+
+          {# ── Deleted file sample from fls -d ─────────────────────── #}
+          {% if view.disk_analysis.deleted_sample %}
+          <div class="disk-sub">
+            <h4>
+              Recovered Deleted Files
+              <span style="font-weight:400;color:var(--muted);font-size:12px">
+                — {{ view.disk_analysis.deleted_sample | length }} of
+                {{ "{:,}".format(view.disk_analysis.total_deleted) }} shown
+              </span>
+            </h4>
+            <ul class="deleted-list">
+              {% for d in view.disk_analysis.deleted_sample %}
+                <li>
+                  <span class="pri">{{ d.name }}</span>
+                  <span class="ino">inode {{ d.inode }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        {% endif %}
+      </section>
+      {% endif %}
+
+      <!-- ════ 5. Key Findings ════ -->
+      <section>
+        <div class="sec-head">
+          <div class="sec-num">V.</div>
           <div class="sec-title">Key Findings</div>
         </div>
         <div class="cards-2">
@@ -632,10 +775,10 @@
         </div>
       </section>
 
-      <!-- ════ 5. Timeline Highlights ════ -->
+      <!-- ════ 6. Timeline Highlights ════ -->
       <section>
         <div class="sec-head">
-          <div class="sec-num">V.</div>
+          <div class="sec-num">VI.</div>
           <div class="sec-title">Timeline Highlights</div>
         </div>
         {% if view.timeline_highlights %}
@@ -660,10 +803,10 @@
         {% endif %}
       </section>
 
-      <!-- ════ 6. Chain of Custody ════ -->
+      <!-- ════ 7. Chain of Custody ════ -->
       <section>
         <div class="sec-head">
-          <div class="sec-num">VI.</div>
+          <div class="sec-num">VII.</div>
           <div class="sec-title">Chain of Custody &amp; Attestation</div>
         </div>
         <div class="coc">

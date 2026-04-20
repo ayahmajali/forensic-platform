@@ -1,0 +1,42 @@
+# Keep the build context small — Render uploads everything in the context
+# to the builder, so trimming this file cuts build time noticeably.
+
+# VCS
+.git
+.gitattributes
+.gitignore
+
+# Editor / local caches
+.vscode
+.idea
+.DS_Store
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+
+# The agent sources + builds — never need to be inside the backend image.
+# The built binaries live in backend/static/downloads/ (already in the
+# container via COPY backend /app) so professors can still download them.
+agent/.venv-build
+agent/build
+agent/dist
+agent/*.spec
+agent/__pycache__
+
+# The cloudflare frontend and docs are published separately.
+cloudflare-frontend
+docs
+
+# Per-dev local overrides
+backend/.env
+backend/uploads
+backend/recovered
+backend/case_data
+**/*.log
+
+# Documentation files — not needed at runtime.
+*.md
+!backend/README.md

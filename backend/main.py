@@ -344,17 +344,46 @@ async def start_investigation(
     evidence: UploadFile = File(...),
     keywords: str = Form(default="password,login,bitcoin,admin,secret,gmail,exe,pdf")
 ):
-    """Upload evidence and start forensic analysis."""
+    """Upload evidence and start forensic analysis.
+
+    Streamed in chunks so disk images (e01/dd/raw often 500 MB - several GB)
+    don't blow the container's RAM. Previous implementation did
+    ``await evidence.read()`` which pulled the entire file into memory.
+    """
     job_id = str(uuid.uuid4())[:8]
-    
-    # Save uploaded file
-    safe_name = evidence.filename.replace(" ", "_")
+
+    # Basic filename hardening — strip path components an attacker might
+    # include via the multipart filename field. We never use the user-supplied
+    # name as a path fragment (always job_id + safe_name), but this keeps the
+    # file listing on disk sane.
+    raw_name = evidence.filename or "evidence.bin"
+    safe_name = Path(raw_name).name.replace(" ", "_")
     evidence_path = UPLOAD_DIR / f"{job_id}_{safe_name}"
-    
-    async with aiofiles.open(str(evidence_path), 'wb') as f:
-        content = await evidence.read()
-        await f.write(content)
-    
+
+    # Stream to disk in 1 MiB chunks. Anything larger than MAX_UPLOAD_BYTES
+    # is rejected mid-stream — we've already read some bytes, so we delete
+    # the partial file before raising.
+    MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB cap
+    CHUNK = 1 * 1024 * 1024
+    total = 0
+    async with aiofiles.open(str(evidence_path), "wb") as f:
+        while True:
+            chunk = await evidence.read(CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                await f.close()
+                try:
+                    evidence_path.unlink()
+                except OSError:
+                    pass
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds {MAX_UPLOAD_BYTES // (1024*1024)} MiB limit",
+                )
+            await f.write(chunk)
+
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
     
     investigation_jobs[job_id] = {
@@ -1068,6 +1097,54 @@ def _case_to_client_view(job: dict) -> dict:
         "file_count": hashes.get("file_count") or job.get("recovered_count") or 0,
     }
 
+    # ── Disk analysis (only populated for disk-image evidence) ─────────────
+    # `disk` is whatever DiskAnalyzer.run_full_disk_analysis() returned — see
+    # modules/disk_analysis.py. It's empty ({}) for logical scans, which the
+    # template reads as "no TSK section, don't render".
+    disk_view = None
+    if disk and disk.get("tsk_available"):
+        fsstat_info = disk.get("fsstat") or {}
+        partitions = [
+            {
+                "slot": str(p.get("slot", "—")),
+                "start": p.get("start", 0),
+                "length": p.get("length", 0),
+                "description": (p.get("description") or "").strip() or "—",
+            }
+            for p in (disk.get("partitions") or [])
+            if str(p.get("description") or "").lower()
+            not in {"unallocated", "primary table (#0)"}
+        ][:10]
+
+        # Only show a short, clean sample of deleted files — strip raw fls rows,
+        # keep just the human-readable file name and its inode.
+        deleted_sample = [
+            {
+                "name": _cv_short_name(d.get("name") or ""),
+                "inode": str(d.get("inode") or "—"),
+            }
+            for d in (disk.get("deleted_files") or [])
+            if d.get("name") and not str(d.get("name")).startswith("$")
+        ][:12]
+
+        disk_view = {
+            "fs_type": (fsstat_info.get("fs_type") or "unknown").upper() or "—",
+            "volume_name": fsstat_info.get("volume_name") or "—",
+            "block_size": fsstat_info.get("block_size") or "—",
+            "last_mount": fsstat_info.get("last_mount") or "—",
+            "partition_count": len(partitions),
+            "partitions": partitions,
+            "total_files": disk.get("total_files", 0),
+            "total_deleted": disk.get("total_deleted", 0),
+            "total_inodes": disk.get("total_inodes", 0),
+            "recovered_count": job.get("recovered_count", 0),
+            "deleted_sample": deleted_sample,
+        }
+    elif disk and disk.get("error"):
+        # TSK not installed on this host — tell the UI so it can render a
+        # friendly "analysis unavailable" note instead of silently hiding.
+        disk_view = {"error": disk.get("error")}
+
     # Headline numbers
     total_files = job.get("recovered_count") or (
         n_images + n_videos + n_docs + n_archives + n_browser_db
@@ -1124,6 +1201,7 @@ def _case_to_client_view(job: dict) -> dict:
         "per_browser_detail": per_browser_detail,
         "keyword_hits": keyword_hits,
         "timeline_highlights": highlights,
+        "disk_analysis": disk_view,
     }
 
 
