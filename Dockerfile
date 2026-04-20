@@ -27,16 +27,19 @@ ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive
 
 # ── System dependencies ──────────────────────────────────────────────────
-# sleuthkit ships mmls/fls/ils/fsstat/icat/tsk_recover.
-# libewf-utils / libewf-dev give us E01 (Expert Witness) image support, the
-# format police agencies actually ship. Without libewf, `mmls some.e01`
-# returns "Cannot determine file system type".
-# libimage-exiftool-perl = exiftool (used by modules/scanner where present).
-# ca-certificates + curl are harmless but helpful for health checks / debug.
+# sleuthkit ships mmls/fls/ils/fsstat/icat/tsk_recover. On Debian bookworm
+# the TSK build already links libewf internally, so .e01 images work at the
+# C-library level without any extra packages.
+#
+# ewf-tools adds the CLI wrappers (ewfmount, ewfinfo, ewfverify) that are
+# handy for investigators who want to mount an E01 as a loop device and
+# spot-check it — not required by the backend but nice to have in the box.
+#
+# libimage-exiftool-perl = exiftool, used by modules/scanner for EXIF / GPS.
+# ca-certificates + curl keep TLS sane and let us do health-check probes.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         sleuthkit \
-        libewf-utils \
-        libewf-dev \
+        ewf-tools \
         libimage-exiftool-perl \
         ca-certificates \
         curl \
