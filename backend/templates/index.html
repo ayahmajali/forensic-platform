@@ -196,9 +196,12 @@
     ══════════════════════════════════════════════ */
     .main-panel {
       max-width: 860px;
-      margin: -40px auto 0;
-      padding: 0 16px;
-      position: relative; z-index: 10;
+      margin: 48px auto 0;
+      padding: 0 16px 24px;
+      position: relative; z-index: 1;
+    }
+    @media (max-width: 640px) {
+      .main-panel { margin-top: 28px; }
     }
     .upload-card {
       background: var(--surface);
@@ -452,6 +455,87 @@
     .log-line.success { color: #4ade80; }
     .log-line.error   { color: #f87171; }
     .log-line.info    { color: #60a5fa; }
+
+    /* ══════════════════════════════════════════════
+       COMPLETION CARD  (shown after analysis finishes)
+    ══════════════════════════════════════════════ */
+    .complete-section { display: none; margin-top: 16px; }
+    .complete-section.show { display: block; animation: fadeUp .45s ease both; }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .complete-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: 4px solid var(--success);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-xl);
+      padding: 28px 24px;
+      text-align: center;
+    }
+    .complete-check {
+      width: 68px; height: 68px; margin: 0 auto 14px;
+      border-radius: 50%;
+      background: var(--success-light);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--success); font-size: 32px;
+      box-shadow: 0 6px 20px rgba(16, 185, 129, .25);
+    }
+    .complete-title {
+      font-size: 22px; font-weight: 900; color: var(--text);
+      letter-spacing: -.01em; margin-bottom: 6px;
+    }
+    .complete-sub {
+      font-size: 13px; color: var(--text-muted);
+      line-height: 1.6; margin-bottom: 4px;
+    }
+    .complete-meta {
+      display: inline-flex; flex-wrap: wrap;
+      justify-content: center; gap: 6px 14px;
+      margin: 12px 0 22px;
+      font-size: 12px; color: var(--text-light);
+    }
+    .complete-meta b { color: var(--text); font-weight: 700; }
+    .complete-actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 12px;
+      max-width: 760px; margin: 0 auto;
+    }
+    .cta-btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      padding: 14px 18px; min-height: 52px;
+      font-size: 14px; font-weight: 700;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, background .18s;
+      text-decoration: none;
+    }
+    .cta-btn i { font-size: 16px; }
+    .cta-btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+    .cta-btn.primary {
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      color: #fff; border-color: transparent;
+      box-shadow: 0 6px 16px var(--primary-glow);
+    }
+    .cta-btn.primary:hover { box-shadow: 0 10px 22px var(--primary-glow); }
+    .cta-btn.secondary {
+      background: var(--surface-2); color: var(--text);
+    }
+    .cta-btn.secondary:hover { background: #e2e8f0; }
+    .cta-btn.ghost {
+      background: transparent; color: var(--primary);
+      border-color: var(--primary-light);
+    }
+    .cta-btn.ghost:hover { background: var(--primary-light); }
+    .complete-tip {
+      margin-top: 18px; padding-top: 16px;
+      border-top: 1px dashed var(--border);
+      font-size: 12px; color: var(--text-muted);
+    }
+    .complete-tip i { color: var(--primary); margin-right: 5px; }
 
     /* ══════════════════════════════════════════════
        JOBS LIST
@@ -941,6 +1025,41 @@
     </div>
   </div>
 
+  <!-- ════════ COMPLETION / NEXT-STEPS CARD ════════ -->
+  <div class="complete-section" id="completeSection">
+    <div class="complete-card">
+      <div class="complete-check"><i class="fas fa-check"></i></div>
+      <div class="complete-title">Investigation complete</div>
+      <div class="complete-sub">
+        Your evidence has been fully processed. Choose how you'd like to review the findings.
+      </div>
+
+      <div class="complete-meta" id="completeMeta">
+        <span><i class="fas fa-hashtag"></i> Case ID: <b id="completeCaseId">—</b></span>
+        <span><i class="fas fa-file-alt"></i> Evidence: <b id="completeEvidence">—</b></span>
+        <span><i class="fas fa-folder-open"></i> Files recovered: <b id="completeRecovered">0</b></span>
+      </div>
+
+      <div class="complete-actions">
+        <a href="#" id="ctaReport"   class="cta-btn primary"   target="_blank" rel="noopener">
+          <i class="fas fa-chart-line"></i> View Interactive Report
+        </a>
+        <a href="#" id="ctaPdf"      class="cta-btn secondary" target="_blank" rel="noopener">
+          <i class="fas fa-file-pdf"></i> Download PDF Report
+        </a>
+        <button type="button" id="ctaReset" class="cta-btn ghost" onclick="resetForm()">
+          <i class="fas fa-plus-circle"></i> Start New Investigation
+        </button>
+      </div>
+
+      <div class="complete-tip">
+        <i class="fas fa-info-circle"></i>
+        The interactive report includes timeline, recovered files, web activity, and the AI summary.
+        The PDF is the signed evidentiary version for chain of custody.
+      </div>
+    </div>
+  </div>
+
   <!-- ════════ JOBS LIST ════════ -->
   <div class="jobs-section" id="jobsSection" style="display:none">
     <div class="section-title">
@@ -1178,7 +1297,10 @@ async function startAnalysis() {
   fd.append('keywords', keywords);
 
   document.getElementById('analyzeBtn').disabled = true;
+  document.getElementById('completeSection').classList.remove('show');
   document.getElementById('progressSection').classList.add('show');
+  document.getElementById('progSpinner').style.display = '';
+  document.getElementById('progLog').innerHTML = '';
   document.getElementById('progTitle').textContent = 'Uploading evidence…';
   setProgress(3);
 
@@ -1247,11 +1369,8 @@ async function pollStatus(jobId) {
       setProgress(100);
       updateSteps(100);
       document.getElementById('progSpinner').style.display = 'none';
-      showToast('✅ Analysis complete! Opening report…', 'success');
-      setTimeout(() => {
-        if (data.report_url) window.open(data.report_url, '_blank');
-        loadJobs();
-      }, 1500);
+      showCompletion(data);
+      loadJobs();
     }
 
     if (data.status === 'failed') {
@@ -1269,6 +1388,54 @@ async function pollStatus(jobId) {
 function setProgress(pct) {
   document.getElementById('progBar').style.width = pct + '%';
   document.getElementById('progPct').textContent  = Math.round(pct) + '%';
+}
+
+/* ─── Completion / Next-steps UI ─── */
+function showCompletion(data) {
+  // Hide the running-progress card and the "Start Analysis" button.
+  const progSec = document.getElementById('progressSection');
+  progSec.classList.remove('show');
+
+  const caseId = data.job_id || data.case_id || currentJobId || '—';
+  const reportUrl = `/case/${encodeURIComponent(caseId)}`;
+  const pdfUrl    = `/api/report/${encodeURIComponent(caseId)}/pdf`;
+
+  document.getElementById('completeCaseId').textContent    = caseId;
+  document.getElementById('completeEvidence').textContent  = data.evidence_name || '—';
+  document.getElementById('completeRecovered').textContent = data.recovered_count || 0;
+
+  const reportA = document.getElementById('ctaReport');
+  const pdfA    = document.getElementById('ctaPdf');
+  reportA.setAttribute('href', reportUrl);
+  pdfA.setAttribute('href', pdfUrl);
+
+  const section = document.getElementById('completeSection');
+  section.classList.add('show');
+  section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  showToast('✅ Analysis complete — choose how to review the findings', 'success');
+}
+
+function resetForm() {
+  // Tear down completion + progress UI
+  document.getElementById('completeSection').classList.remove('show');
+  document.getElementById('progressSection').classList.remove('show');
+  document.getElementById('progSpinner').style.display = '';
+  document.getElementById('progLog').innerHTML = '';
+  setProgress(0);
+  updateSteps(0);
+
+  // Reset polling state
+  clearInterval(pollInterval);
+  pollInterval = null;
+  currentJobId = null;
+
+  // Reset the upload card back to its initial state
+  clearFile();
+
+  // Bring the user back to the drop zone
+  const panel = document.querySelector('.main-panel');
+  if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 /* ─── Jobs list ─── */
