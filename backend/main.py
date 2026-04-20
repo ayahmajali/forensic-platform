@@ -708,6 +708,467 @@ async def download_pdf_report_alias(case_id: str):
 
 
 # ─────────────────────────────────────────
+# Customer-facing report view (/case/{case_id})
+# ─────────────────────────────────────────
+# The raw /results/{case_id} JSON contains investigator-only details:
+# absolute filesystem paths, per-file hashes, scanner error logs, and internal
+# shape-keys like `scanner_findings_sample`. Clients should NOT see that — they
+# want a polished, executive-style report. This block produces that view.
+
+def _cv_short_name(path: Optional[str]) -> str:
+    """Reduce an absolute path to a client-safe display name.
+
+    ``/Users/admin/Downloads/photo.jpg`` → ``Downloads / photo.jpg``
+    ``C:\\Users\\Jane\\Desktop\\case.pdf`` → ``Desktop / case.pdf``
+    A bare filename is returned unchanged.
+    """
+    if not path:
+        return "—"
+    p = str(path).replace("\\", "/").rstrip("/")
+    parts = [s for s in p.split("/") if s]
+    if not parts:
+        return "—"
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[-2]} / {parts[-1]}"
+
+
+def _cv_bytes(n) -> str:
+    """Human-friendly byte count (1.4 MB, 912 KB, 8.3 GB …)."""
+    try:
+        n = float(n or 0)
+    except (TypeError, ValueError):
+        return "—"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+def _cv_duration(seconds) -> str:
+    """Seconds → H:MM:SS (or M:SS if under an hour)."""
+    try:
+        s = int(float(seconds or 0))
+    except (TypeError, ValueError):
+        return "—"
+    if s <= 0:
+        return "—"
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _cv_short_hash(h: Optional[str]) -> str:
+    """First/last 8 chars of a hex digest, e.g. ``3f2a9b4c…e1d07a8f``."""
+    if not h or not isinstance(h, str) or len(h) < 20:
+        return h or "—"
+    return f"{h[:8]}…{h[-8:]}"
+
+
+def _cv_domain(url: Optional[str]) -> str:
+    """Extract a bare hostname from a URL. Falls back to a trimmed string."""
+    if not url:
+        return "—"
+    s = str(url)
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    return s.split("/", 1)[0].split("?", 1)[0][:64]
+
+
+def _cv_timestamp(ts: Optional[str]) -> str:
+    """Best-effort ISO-ish timestamp → ``YYYY-MM-DD HH:MM`` for the report."""
+    if not ts:
+        return ""
+    s = str(ts).replace("T", " ")
+    # Strip subsecond / timezone tails.
+    for cut in (".", "+", "Z"):
+        if cut in s:
+            s = s.split(cut, 1)[0]
+    return s[:16]
+
+
+def _cv_scrub_paths(text: str) -> str:
+    """
+    Redact absolute filesystem paths inside free-form text (e.g. the AI summary).
+
+    Strips user-directory prefixes first so host usernames don't leak:
+      ``/Users/jane/Downloads``            → ``Downloads``
+      ``/Users/jane/Downloads/photo.jpg``  → ``Downloads / photo.jpg``
+      ``C:\\Users\\Jane\\Desktop\\case.pdf`` → ``Desktop / case.pdf``
+      ``/System/Library/Frameworks/x.y``   → ``Frameworks / x.y``
+    """
+    import re as _re
+    if not text:
+        return text
+
+    def _shorten(path: str) -> str:
+        # Normalize and drop user-directory prefixes so the username never leaks.
+        p = path.replace("\\", "/")
+        # /Users/<user>/   or /home/<user>/   → strip entirely
+        p = _re.sub(r"^/(Users|home)/[^/]+/?", "", p)
+        # /private/var/...  → var/...
+        p = _re.sub(r"^/private/", "", p)
+        # /System/ /var/ /tmp/ /opt/ /Volumes/ → drop the top segment
+        p = _re.sub(r"^/(System|var|tmp|opt|Volumes)/", "", p)
+        # Windows C:\Users\<user>\  → ""
+        p = _re.sub(r"^[A-Za-z]:/Users/[^/]+/?", "", p)
+        # Windows C:\<anything>\   → drop drive
+        p = _re.sub(r"^[A-Za-z]:/", "", p)
+        p = p.strip("/")
+        if not p:
+            return "Scan"
+        parts = [s for s in p.split("/") if s]
+        if len(parts) == 1:
+            return parts[0]
+        return f"{parts[-2]} / {parts[-1]}"
+
+    def _sub(m):
+        return _shorten(m.group(0))
+
+    # POSIX absolute paths
+    text = _re.sub(r"/(?:Users|home|System|var|tmp|opt|Volumes|private)(?:/[^\s`\"'<>]*)?", _sub, text)
+    # Windows-style paths (C:\... or C:/...)
+    text = _re.sub(r"[A-Za-z]:[\\/][^\s`\"'<>]*", _sub, text)
+    # Strip ", user `name`" from AI-generated host summaries — the hostname
+    # alone is already sufficient context for a client-facing report.
+    text = _re.sub(r",\s*user\s+`[^`]+`", "", text)
+    return text
+
+
+def _cv_md_to_html(md: str) -> str:
+    """
+    Tiny markdown → HTML converter for the AI summary.
+
+    We only implement the subset the summaries actually use: ``#`` headings,
+    ``**bold**``, backtick-code, and bullet lists. Everything else is treated
+    as paragraphs. Deliberately no external dependency.
+
+    Absolute paths are scrubbed *before* conversion so the customer view never
+    re-leaks investigator-only filesystem paths via the AI narrative.
+    """
+    import html as _html
+    import re as _re
+    if not md:
+        return ""
+    md = _cv_scrub_paths(md)
+    lines = md.splitlines()
+    out: list[str] = []
+    in_ul = False
+    for raw in lines:
+        line = raw.rstrip()
+        if not line.strip():
+            if in_ul:
+                out.append("</ul>")
+                in_ul = False
+            continue
+        # headings
+        m = _re.match(r"^(#{1,4})\s+(.*)$", line)
+        if m:
+            if in_ul:
+                out.append("</ul>"); in_ul = False
+            level = min(len(m.group(1)) + 1, 5)  # shift h1→h2 so report's h1 stays unique
+            out.append(f"<h{level}>{_html.escape(m.group(2))}</h{level}>")
+            continue
+        # bullets
+        m = _re.match(r"^\s*[-*]\s+(.*)$", line)
+        if m:
+            if not in_ul:
+                out.append("<ul>"); in_ul = True
+            out.append(f"<li>{_cv_inline_md(m.group(1))}</li>")
+            continue
+        if in_ul:
+            out.append("</ul>"); in_ul = False
+        out.append(f"<p>{_cv_inline_md(line)}</p>")
+    if in_ul:
+        out.append("</ul>")
+    return "\n".join(out)
+
+
+def _cv_inline_md(s: str) -> str:
+    """Inline markdown: escape HTML then re-introduce **bold** and `code`."""
+    import html as _html
+    import re as _re
+    s = _html.escape(s)
+    s = _re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+    s = _re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    return s
+
+
+def _case_to_client_view(job: dict) -> dict:
+    """
+    Project a completed case into a *client-safe* shape for the customer report.
+
+    Strips or abstracts:
+      • absolute system paths  →  filename / parent only
+      • per-file hashes        →  truncated (still verifiable) + downloadable certificate
+      • scanner error logs     →  dropped
+      • scanner_findings_sample→  dropped
+
+    Produces:
+      • headline KPIs
+      • curated "Key Findings" cards (Documents, Images, Videos, Browser, Keywords)
+      • a tight "Timeline Highlights" list (max 30 rows, newest first)
+      • cleaned AI summary rendered to HTML
+    """
+    case_id = job.get("case_id") or job.get("job_id") or ""
+    artifacts = job.get("artifacts") or {}
+    disk = job.get("disk_results") or {}
+    hashes = job.get("hashes") or {}
+    timeline = job.get("timeline") or []
+    search = job.get("search_results") or {}
+    host = job.get("host") or {}
+
+    multimedia = artifacts.get("multimedia") or []
+    documents = artifacts.get("documents") or []
+    browser = artifacts.get("browser_history") or []
+    videos_art = artifacts.get("videos") or []
+    metadata_entries = artifacts.get("metadata") or []
+
+    # ── Category counts ────────────────────────────────────────────────────
+    n_images = sum(1 for m in multimedia if m.get("type") == "image")
+    n_videos = sum(1 for m in multimedia if m.get("type") == "video") or len(videos_art)
+    n_docs = sum(1 for d in documents if d.get("type") in {"pdf", "docx", "text"})
+    n_archives = sum(1 for d in documents if str(d.get("type", "")).startswith("archive"))
+    n_browser_db = sum(1 for d in documents if d.get("type") == "browser_db")
+
+    # Images with GPS → presented as a "location-aware evidence" highlight.
+    n_gps = 0
+    for m in multimedia:
+        if m.get("type") != "image":
+            continue
+        exif = m.get("exif") or {}
+        for k in exif:
+            if "gps" in str(k).lower():
+                n_gps += 1
+                break
+
+    # ── Curated cards ──────────────────────────────────────────────────────
+    image_samples = [
+        {
+            "name": _cv_short_name(m.get("name") or m.get("path")),
+            "size": _cv_bytes(m.get("size")),
+            "captured": _cv_timestamp((m.get("exif") or {}).get("DateTimeOriginal")
+                                      or (m.get("exif") or {}).get("CreateDate")
+                                      or m.get("mtime")),
+        }
+        for m in multimedia if m.get("type") == "image"
+    ][:6]
+
+    video_samples = [
+        {
+            "name": _cv_short_name(m.get("name") or m.get("path")),
+            "size": _cv_bytes(m.get("size")),
+            "duration": _cv_duration((m.get("media") or {}).get("duration_seconds")
+                                     or (m.get("media") or {}).get("duration")),
+            "codec": (m.get("media") or {}).get("video_codec") or "—",
+        }
+        for m in multimedia if m.get("type") == "video"
+    ][:6] or [
+        {
+            "name": _cv_short_name(v.get("name") or v.get("path")),
+            "size": _cv_bytes(v.get("size")),
+            "duration": _cv_duration((v.get("media") or {}).get("duration_seconds")
+                                     or (v.get("media") or {}).get("duration")),
+            "codec": (v.get("media") or {}).get("video_codec") or "—",
+        }
+        for v in videos_art
+    ][:6]
+
+    document_samples = [
+        {
+            "name": _cv_short_name(d.get("name") or d.get("path")),
+            "type": str(d.get("type", "doc")).upper(),
+            "size": _cv_bytes(d.get("size")),
+            "preview": (d.get("text_preview") or "")[:180].strip(),
+        }
+        for d in documents if d.get("type") in {"pdf", "docx", "text"}
+    ][:8]
+
+    # Browser → top-visited domains, not full URLs.
+    from collections import Counter as _Counter
+    domain_counter: _Counter = _Counter()
+    for h in browser:
+        dom = _cv_domain(h.get("url"))
+        visits = int(h.get("visit_count") or 1)
+        domain_counter[dom] += visits
+    top_domains = [
+        {"domain": d, "visits": c}
+        for d, c in domain_counter.most_common(10)
+        if d and d != "—"
+    ]
+    n_browser_rows = len(browser)
+    n_browsers_used = len({h.get("browser") for h in browser if h.get("browser")})
+
+    # Per-browser breakdown — comes from the scanner's discovery pass (one row
+    # per Browser × Profile). We sum across profiles so the customer view just
+    # sees "Google Chrome: 412, Safari: 118" without profile noise, and keep
+    # the detailed per-profile list available as `per_browser_detail` for the
+    # technical annex.
+    raw_by_browser = artifacts.get("history_by_browser") or {}
+    merged: dict = {}
+    for label, count in raw_by_browser.items():
+        browser_name = label.split(" — ")[0] if " — " in label else label
+        merged[browser_name] = merged.get(browser_name, 0) + int(count or 0)
+    per_browser = [
+        {"browser": name, "visits": count}
+        for name, count in sorted(merged.items(), key=lambda kv: kv[1], reverse=True)
+        if count > 0
+    ]
+    per_browser_detail = [
+        {"label": label, "visits": count}
+        for label, count in sorted(raw_by_browser.items(), key=lambda kv: kv[1], reverse=True)
+        if count > 0
+    ]
+
+    # Keywords — only show categories that actually hit.
+    keyword_hits = [
+        {"keyword": kw, "count": len(hits or [])}
+        for kw, hits in (search or {}).items()
+        if hits
+    ]
+
+    # ── Timeline highlights ────────────────────────────────────────────────
+    # Prefer "visited" (browser activity) and "modified" events, newest first.
+    ranked = sorted(
+        [ev for ev in timeline if ev.get("timestamp")],
+        key=lambda e: e.get("timestamp") or "",
+        reverse=True,
+    )
+    highlights = []
+    seen = set()
+    for ev in ranked:
+        key = (ev.get("timestamp"), ev.get("action"), ev.get("file"))
+        if key in seen:
+            continue
+        seen.add(key)
+        action = ev.get("action") or "event"
+        if action == "visited":
+            label = ev.get("title") or _cv_domain(ev.get("file"))
+            detail = _cv_domain(ev.get("file"))
+        else:
+            label = _cv_short_name(ev.get("file"))
+            detail = action.capitalize()
+        highlights.append({
+            "when": _cv_timestamp(ev.get("timestamp")),
+            "action": action,
+            "label": label,
+            "detail": detail,
+        })
+        if len(highlights) >= 30:
+            break
+
+    # ── Evidence integrity (public view hides full digest) ─────────────────
+    integrity = {
+        "verified": bool(hashes.get("md5") or hashes.get("sha256")),
+        "algorithm": hashes.get("algorithm_note") or "MD5 / SHA-1 / SHA-256",
+        "md5_short": _cv_short_hash(hashes.get("md5")),
+        "sha1_short": _cv_short_hash(hashes.get("sha1")),
+        "sha256_short": _cv_short_hash(hashes.get("sha256") or hashes.get("sha256_of_contents")),
+        "file_count": hashes.get("file_count") or job.get("recovered_count") or 0,
+    }
+
+    # Headline numbers
+    total_files = job.get("recovered_count") or (
+        n_images + n_videos + n_docs + n_archives + n_browser_db
+    )
+    total_events = len(timeline)
+
+    # AI summary → HTML
+    ai_html = _cv_md_to_html(job.get("ai_summary") or "")
+
+    # Evidence source — never show full investigator path, and drop the host
+    # username entirely (``/Users/<user>/Downloads`` → ``Downloads``). For
+    # individual file names elsewhere we keep the parent folder for context,
+    # but the evidence label should read as a clean target ("Downloads",
+    # "Documents", "Evidence Disk 01").
+    raw_evidence = str(job.get("evidence_name") or "Logical scan")
+    normalised = raw_evidence.replace("\\", "/").rstrip("/")
+    if "/" in normalised:
+        last = [p for p in normalised.split("/") if p][-1] or "Scan"
+        evidence_label = last
+    else:
+        evidence_label = normalised or "Logical scan"
+    evidence_source = {
+        "name": evidence_label,
+        "type": "Logical filesystem scan" if job.get("evidence_type") == "logical_scan" else "Disk image",
+        "host": host.get("hostname") or "—",
+        "os": host.get("os") or "—",
+    }
+
+    return {
+        "case_id": case_id,
+        "case_id_short": (case_id[:8] if case_id else "—").upper(),
+        "generated_at": _cv_timestamp(job.get("completed_at") or job.get("created_at") or datetime.utcnow().isoformat()),
+        "investigator": job.get("investigator") or "Forensic Analyst",
+        "evidence": evidence_source,
+        "kpis": {
+            "files_examined": total_files,
+            "timeline_events": total_events,
+            "documents": n_docs,
+            "images": n_images,
+            "videos": n_videos,
+            "archives": n_archives,
+            "browser_rows": n_browser_rows,
+            "browsers_used": n_browsers_used,
+            "gps_tagged": n_gps,
+            "metadata_records": len(metadata_entries),
+        },
+        "integrity": integrity,
+        "executive_summary_html": ai_html,
+        "documents_sample": document_samples,
+        "images_sample": image_samples,
+        "videos_sample": video_samples,
+        "top_domains": top_domains,
+        "per_browser": per_browser,
+        "per_browser_detail": per_browser_detail,
+        "keyword_hits": keyword_hits,
+        "timeline_highlights": highlights,
+    }
+
+
+@app.get("/case/{case_id}", response_class=HTMLResponse)
+async def client_case_report(request: Request, case_id: str):
+    """
+    **Customer-facing** forensic report page.
+
+    This is the polished, shareable view — intended for end-clients or legal
+    stakeholders. It deliberately hides raw filesystem paths, per-file hashes,
+    scanner error logs, and internal JSON plumbing. The investigator still has
+    /results/{case_id} and /api/report/{case_id}/pdf for the full technical
+    record.
+    """
+    job = _require_case(case_id)
+    if job.get("status") != "completed":
+        return HTMLResponse(
+            content=(
+                "<!doctype html><meta charset='utf-8'>"
+                "<title>Report pending</title>"
+                "<body style='font-family:Inter,system-ui;padding:48px;max-width:640px;margin:0 auto;color:#0f172a'>"
+                f"<h1 style='color:#1e3a8a'>Case {case_id[:8].upper()}</h1>"
+                f"<p>Analysis is still in progress ({job.get('progress', 0)}%). "
+                "This page will be available once the investigation completes.</p>"
+                "</body>"
+            ),
+            status_code=202,
+        )
+    view = _case_to_client_view(job)
+    return templates.TemplateResponse(request, "case_report.html", {"view": view})
+
+
+@app.get("/case/{case_id}/overview")
+async def client_case_overview(case_id: str):
+    """JSON variant of the sanitized client view — safe to expose to the frontend."""
+    job = _require_case(case_id)
+    if job.get("status") != "completed":
+        return JSONResponse(
+            {"case_id": case_id, "status": job.get("status"), "progress": job.get("progress")},
+            status_code=202,
+        )
+    return JSONResponse(_case_to_client_view(job))
+
+
+# ─────────────────────────────────────────
 # Agent endpoint (API-key protected)
 # ─────────────────────────────────────────
 
@@ -761,7 +1222,8 @@ async def agent_upload(
         "job_id": job_id,
         "status": "queued",
         "status_url": f"/api/status/{job_id}",
-        "results_url": f"/results/{job_id}",
+        "report_url": f"/case/{job_id}",          # polished client-facing page
+        "results_url": f"/results/{job_id}",      # raw investigator JSON
         "pdf_url": f"/report/{job_id}",
         "message": "Evidence received. Analysis started.",
     })
@@ -956,6 +1418,11 @@ def _findings_to_case(findings: dict, case_id: str) -> dict:
         "metadata": metadata_entries,
         "browser_history": browser_history,
         "videos": videos,
+        # Per-browser rollup + discovered DB paths straight from the scanner.
+        # These feed the customer report's "Web Activity" card (per-browser
+        # chips) and the investigator's technical annex.
+        "history_by_browser": (findings.get("summary") or {}).get("history_by_browser") or {},
+        "browser_sources": findings.get("browser_sources") or [],
     }
 
     disk_results_block = {
@@ -1099,7 +1566,8 @@ async def agent_findings(
         "job_id": case_id,
         "status": "completed",
         "status_url": f"/api/status/{case_id}",
-        "results_url": f"/results/{case_id}",
+        "report_url": f"/case/{case_id}",         # polished client-facing page
+        "results_url": f"/results/{case_id}",     # raw investigator JSON
         "timeline_url": f"/timeline/{case_id}",
         "pdf_url": f"/report/{case_id}",
         "file_count": case["recovered_count"],

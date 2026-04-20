@@ -172,6 +172,20 @@ Keep it professional, concise, and actionable for an investigator."""
         ]))
         domains = [d for d in domains if d][:10]
 
+        # Per-browser rollup — comes from the scanner's system-wide discovery
+        # pass. Lets the summary say "Chrome: 412, Safari: 118" instead of a
+        # single aggregate count.
+        history_by_browser = artifacts.get("history_by_browser") or {}
+        # Sum across profiles so "Chrome — Default" + "Chrome — Profile 1" → "Chrome".
+        _merged: dict = {}
+        for _label, _count in history_by_browser.items():
+            _base = _label.split(" — ")[0] if " — " in _label else _label
+            _merged[_base] = _merged.get(_base, 0) + int(_count or 0)
+        per_browser_line = ""
+        if _merged:
+            _parts = [f"**{b}** ({c:,})" for b, c in sorted(_merged.items(), key=lambda kv: kv[1], reverse=True) if c > 0]
+            per_browser_line = "- Per-browser breakdown: " + " · ".join(_parts)
+
         return f"""## 🔍 AI Investigation Summary
 
 **Case File:** {evidence_name}  
@@ -211,7 +225,8 @@ generated **{timeline_count}** timeline events.
 ---
 
 ### 🌐 Browser Activity
-{f'- **{len(browser_history)}** browsing history entries detected' if browser_history else '- No browser history found'}
+{f'- **{len(browser_history):,}** browsing history entries detected across **{sum(1 for c in _merged.values() if c > 0)}** browser(s)' if browser_history else '- No browser history accessible — on macOS, grant the agent **Full Disk Access** (System Settings → Privacy & Security → Full Disk Access) so it can read Chrome/Safari/Firefox profile databases. On Windows, run the agent with a user account that owns the browser profiles.'}
+{per_browser_line}
 {('- **Top domains visited:** ' + ', '.join(f'`{d}`' for d in domains[:5])) if domains else ''}
 
 ---

@@ -1084,9 +1084,13 @@ class ForensicAgentApp(ctk.CTk):
         case_id = data.get("case_id", "")
         url = self._entry_url.get().strip().rstrip("/")
         # Backend routes (defined in backend/main.py):
-        #   /results/{case_id}   — HTML case view
+        #   /case/{case_id}      — polished, client-safe HTML report
+        #   /results/{case_id}   — raw investigator JSON (hashes, paths, etc.)
         #   /report/{case_id}    — PDF download
-        case_url = f"{url}/results/{case_id}"
+        # The "Open Case in Browser" button points at the customer-facing
+        # report. Investigators who still need the raw JSON can hit
+        # /results/{case_id} manually or via the API.
+        case_url = f"{url}/case/{case_id}"
         report_url = f"{url}/report/{case_id}"
 
         # ID row
@@ -1168,7 +1172,8 @@ class ForensicAgentApp(ctk.CTk):
                     continue
 
                 sub_case_id = dc.get("case_id") or dc.get("job_id", "")
-                sub_case_url = f"{url}/results/{sub_case_id}"
+                # Polished client-facing report (see note above).
+                sub_case_url = f"{url}/case/{sub_case_id}"
                 sub_report_url = f"{url}/report/{sub_case_id}"
 
                 top = ctk.CTkFrame(sub, fg_color="transparent")

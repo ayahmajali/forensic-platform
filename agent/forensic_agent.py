@@ -27,7 +27,7 @@ Usage
 
 Environment variables
 ---------------------
-    FORENSIC_API_URL      Backend URL                (default: http://localhost:8000)
+    FORENSIC_API_URL      Backend URL                (default: https://forensic-site.onrender.com)
     FORENSIC_API_KEY      Agent API key              (required for upload)
 """
 
@@ -68,7 +68,11 @@ except ImportError as e:  # pragma: no cover
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-DEFAULT_API_URL = "http://localhost:8000"
+# Default backend URL. The hosted service is the default so the downloaded
+# .exe / binary works out of the box — professors / end users shouldn't need
+# to set any environment variables. Developers running a local backend can
+# override with FORENSIC_API_URL=http://localhost:8000 or --api-url.
+DEFAULT_API_URL = "https://forensic-site.onrender.com"
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
 
@@ -470,9 +474,10 @@ def scan(
     payload = resp.json()
     case_id = payload.get("case_id")
     click.secho(f"✓ Findings submitted. Case ID: {case_id}", fg="green")
-    click.echo(f"  Results    : {base_url}{payload.get('results_url', '/results/' + case_id)}")
-    click.echo(f"  Timeline   : {base_url}{payload.get('timeline_url', '/timeline/' + case_id)}")
+    click.echo(f"  Report     : {base_url}/case/{case_id}   (client-facing HTML)")
     click.echo(f"  PDF Report : {base_url}{payload.get('pdf_url', '/report/' + case_id)}")
+    click.echo(f"  Timeline   : {base_url}{payload.get('timeline_url', '/timeline/' + case_id)}")
+    click.echo(f"  Raw JSON   : {base_url}{payload.get('results_url', '/results/' + case_id)}")
 
     # ── Optionally upload disk images for Sleuth Kit processing ─────────────
     disk_imgs = findings.get("images_to_upload", [])

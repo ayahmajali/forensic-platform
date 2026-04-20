@@ -72,9 +72,10 @@ EXT_SQLITE    = {".sqlite", ".sqlite3", ".db"}
 # confirmed before parsing — otherwise a file named "History" but not actually
 # SQLite would blow up sqlite3.connect.
 BROWSER_DB_NAMES = {
-    "History",         # Chrome / Chromium / Edge / Brave / Opera
+    "History",         # Chrome / Chromium / Edge / Brave / Opera / Vivaldi / Arc / Yandex
     "history",         # case variations
-    "places.sqlite",   # Firefox / Tor Browser
+    "History.db",      # Safari (macOS)
+    "places.sqlite",   # Firefox / Tor Browser / Waterfox / LibreWolf
     "Cookies",         # Chrome cookies (useful forensic artefact)
     "Login Data",      # Chrome saved logins
 }
@@ -344,7 +345,7 @@ def _parse_chrome_history(path: Path) -> List[Dict[str, Any]]:
     target = tmp or path
     out: List[Dict[str, Any]] = []
     try:
-        con = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=2)
+        con = sqlite3.connect(f"file:{target}?mode=ro&immutable=1", uri=True, timeout=2)
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         cur.execute(
@@ -382,7 +383,7 @@ def _parse_firefox_history(path: Path) -> List[Dict[str, Any]]:
     target = tmp or path
     out: List[Dict[str, Any]] = []
     try:
-        con = sqlite3.connect(f"file:{target}?mode=ro", uri=True, timeout=2)
+        con = sqlite3.connect(f"file:{target}?mode=ro&immutable=1", uri=True, timeout=2)
         con.row_factory = sqlite3.Row
         cur = con.cursor()
         cur.execute(
@@ -432,9 +433,366 @@ def _extract_browser_history(path: Path) -> Dict[str, Any]:
                        "chrome")
             return {"browser": browser, "history_entries": entries}
         return {"note": "File named History but not a SQLite database."}
+    if name == "History.db":
+        if _is_sqlite(path):
+            entries = _parse_safari_history(path)
+            return {"browser": "safari", "history_entries": entries}
+        return {"note": "File named History.db but not a SQLite database."}
     # Cookies / Login Data — flagged but we don't parse them into the report
     # (cookie contents can contain secrets the user didn't consent to exfiltrate).
     return {"note": f"Browser profile DB ({name}) — not parsed (privacy)."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Safari history — Cocoa epoch (seconds since 2001-01-01 UTC)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Offset between Cocoa reference date (2001-01-01) and Unix epoch (1970-01-01),
+# in seconds. Safari stores history_visits.visit_time as a Cocoa timestamp.
+COCOA_EPOCH_OFFSET_S = 978_307_200
+
+
+def _cocoa_time_to_iso(cocoa_s: Optional[float]) -> Optional[str]:
+    if not cocoa_s:
+        return None
+    try:
+        unix_s = float(cocoa_s) + COCOA_EPOCH_OFFSET_S
+        if unix_s <= 0:
+            return None
+        return datetime.fromtimestamp(unix_s, tz=timezone.utc) \
+            .strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _parse_safari_history(path: Path) -> List[Dict[str, Any]]:
+    """
+    Read Safari's History.db (macOS). Joins history_items → history_visits to
+    get url, title, visit_count, last_visit_at — same shape as the Chrome/FF
+    parsers so the downstream code is uniform.
+    """
+    import sqlite3
+
+    tmp = _copy_to_tmp(path)
+    target = tmp or path
+    out: List[Dict[str, Any]] = []
+    try:
+        con = sqlite3.connect(f"file:{target}?mode=ro&immutable=1", uri=True, timeout=2)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT  hi.url              AS url,
+                    hv.title            AS title,
+                    hi.visit_count      AS visit_count,
+                    MAX(hv.visit_time)  AS last_visit_time
+            FROM    history_items hi
+            JOIN    history_visits hv ON hv.history_item = hi.id
+            GROUP BY hi.id
+            ORDER BY last_visit_time DESC
+            LIMIT  ?
+            """,
+            (BROWSER_HISTORY_ROW_CAP,),
+        )
+        for row in cur.fetchall():
+            out.append({
+                "url": row["url"],
+                "title": row["title"] or "",
+                "visit_count": row["visit_count"] or 0,
+                "last_visit_at": _cocoa_time_to_iso(row["last_visit_time"]),
+                "browser": "safari",
+                "source": str(path),
+            })
+        con.close()
+    except sqlite3.DatabaseError as e:
+        return [{"error": f"safari history read failed: {e}", "source": str(path)}]
+    finally:
+        if tmp and tmp.exists():
+            try: tmp.unlink()
+            except OSError: pass
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System-wide browser-history discovery
+# ─────────────────────────────────────────────────────────────────────────────
+# The walk-based extractor above only catches browser DBs that happen to live
+# inside the scanned directory. Investigators expect "all browsers on this
+# machine" — so we do a dedicated discovery pass over the well-known user-data
+# locations per OS. Every supported browser is listed below; each entry carries
+# the roots to search plus the glob used to enumerate profiles.
+#
+# Supported families:
+#   • Chromium (History SQLite)   — Chrome, Chromium, Chrome Beta/Canary/Dev,
+#     Edge (+ Beta/Dev/Canary), Brave (+ Beta/Nightly), Opera (+ GX/Developer),
+#     Vivaldi, Arc, Yandex.
+#   • Gecko / Firefox (places.sqlite) — Firefox, Firefox Dev/Nightly/ESR,
+#     Waterfox, LibreWolf, Tor Browser.
+#   • Apple WebKit (History.db) — Safari (macOS only).
+
+
+def _home() -> Path:
+    return Path(os.path.expanduser("~"))
+
+
+def _browser_registry() -> List[Dict[str, Any]]:
+    """
+    Return a list of browser descriptors for the current OS.
+
+    Each descriptor:
+      {
+        "name":          display name,
+        "family":        "chromium" | "firefox" | "safari",
+        "user_data_dirs":[Path, ...],     # roots to scan
+        "profile_glob":  "*" or None,     # None means DB is directly in root
+        "db_filename":   "History" | "places.sqlite" | "History.db",
+      }
+    """
+    home = _home()
+    system = platform.system().lower()  # "darwin" | "linux" | "windows"
+
+    entries: List[Dict[str, Any]] = []
+
+    # ── macOS ──────────────────────────────────────────────────────────────
+    if system == "darwin":
+        app_support = home / "Library" / "Application Support"
+        chromium_roots = {
+            "Google Chrome":        [app_support / "Google" / "Chrome"],
+            "Google Chrome Beta":   [app_support / "Google" / "Chrome Beta"],
+            "Google Chrome Canary": [app_support / "Google" / "Chrome Canary"],
+            "Chromium":             [app_support / "Chromium"],
+            "Microsoft Edge":       [app_support / "Microsoft Edge"],
+            "Microsoft Edge Beta":  [app_support / "Microsoft Edge Beta"],
+            "Microsoft Edge Dev":   [app_support / "Microsoft Edge Dev"],
+            "Brave":                [app_support / "BraveSoftware" / "Brave-Browser"],
+            "Brave Beta":           [app_support / "BraveSoftware" / "Brave-Browser-Beta"],
+            "Brave Nightly":        [app_support / "BraveSoftware" / "Brave-Browser-Nightly"],
+            "Vivaldi":              [app_support / "Vivaldi"],
+            "Opera":                [app_support / "com.operasoftware.Opera"],
+            "Opera GX":             [app_support / "com.operasoftware.OperaGX"],
+            "Arc":                  [app_support / "Arc" / "User Data"],
+            "Yandex":               [app_support / "Yandex" / "YandexBrowser"],
+        }
+        for name, roots in chromium_roots.items():
+            entries.append({
+                "name": name, "family": "chromium",
+                "user_data_dirs": roots, "profile_glob": "*",
+                "db_filename": "History",
+            })
+        # Firefox family
+        firefox_roots = {
+            "Firefox":             [home / "Library" / "Application Support" / "Firefox" / "Profiles"],
+            "Firefox Developer":   [home / "Library" / "Application Support" / "Firefox Developer Edition" / "Profiles"],
+            "Firefox Nightly":     [home / "Library" / "Application Support" / "Firefox Nightly" / "Profiles"],
+            "Waterfox":            [home / "Library" / "Application Support" / "Waterfox" / "Profiles"],
+            "LibreWolf":           [home / "Library" / "Application Support" / "LibreWolf" / "Profiles"],
+            "Tor Browser":         [home / "Library" / "Application Support" / "TorBrowser-Data" / "Browser"],
+        }
+        for name, roots in firefox_roots.items():
+            entries.append({
+                "name": name, "family": "firefox",
+                "user_data_dirs": roots, "profile_glob": "*",
+                "db_filename": "places.sqlite",
+            })
+        # Safari — single DB, no profile subdir.
+        entries.append({
+            "name": "Safari", "family": "safari",
+            "user_data_dirs": [home / "Library" / "Safari"],
+            "profile_glob": None, "db_filename": "History.db",
+        })
+
+    # ── Linux ──────────────────────────────────────────────────────────────
+    elif system == "linux":
+        cfg = home / ".config"
+        chromium_roots = {
+            "Google Chrome":       [cfg / "google-chrome"],
+            "Google Chrome Beta":  [cfg / "google-chrome-beta"],
+            "Google Chrome Unstable": [cfg / "google-chrome-unstable"],
+            "Chromium":            [cfg / "chromium", home / "snap" / "chromium" / "common" / "chromium"],
+            "Microsoft Edge":      [cfg / "microsoft-edge"],
+            "Microsoft Edge Beta": [cfg / "microsoft-edge-beta"],
+            "Microsoft Edge Dev":  [cfg / "microsoft-edge-dev"],
+            "Brave":               [cfg / "BraveSoftware" / "Brave-Browser"],
+            "Brave Beta":          [cfg / "BraveSoftware" / "Brave-Browser-Beta"],
+            "Brave Nightly":       [cfg / "BraveSoftware" / "Brave-Browser-Nightly"],
+            "Vivaldi":             [cfg / "vivaldi"],
+            "Opera":               [cfg / "opera"],
+            "Yandex":              [cfg / "yandex-browser"],
+        }
+        for name, roots in chromium_roots.items():
+            entries.append({
+                "name": name, "family": "chromium",
+                "user_data_dirs": roots, "profile_glob": "*",
+                "db_filename": "History",
+            })
+        firefox_roots = {
+            "Firefox":         [home / ".mozilla" / "firefox",
+                                home / "snap" / "firefox" / "common" / ".mozilla" / "firefox"],
+            "Firefox ESR":     [home / ".mozilla" / "firefox-esr"],
+            "Waterfox":        [home / ".waterfox"],
+            "LibreWolf":       [home / ".librewolf"],
+            "Tor Browser":     [home / ".tor-browser" / "app" / "Browser" / "TorBrowser" / "Data" / "Browser",
+                                home / ".local" / "share" / "torbrowser" / "tbb" / "x86_64" / "tor-browser" / "Browser" / "TorBrowser" / "Data" / "Browser"],
+        }
+        for name, roots in firefox_roots.items():
+            entries.append({
+                "name": name, "family": "firefox",
+                "user_data_dirs": roots, "profile_glob": "*",
+                "db_filename": "places.sqlite",
+            })
+
+    # ── Windows ────────────────────────────────────────────────────────────
+    elif system == "windows":
+        local   = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+        roaming = Path(os.environ.get("APPDATA",      home / "AppData" / "Roaming"))
+        chromium_roots = {
+            "Google Chrome":       [local   / "Google" / "Chrome" / "User Data"],
+            "Google Chrome Beta":  [local   / "Google" / "Chrome Beta" / "User Data"],
+            "Google Chrome Canary":[local   / "Google" / "Chrome SxS" / "User Data"],
+            "Chromium":            [local   / "Chromium" / "User Data"],
+            "Microsoft Edge":      [local   / "Microsoft" / "Edge" / "User Data"],
+            "Microsoft Edge Beta": [local   / "Microsoft" / "Edge Beta" / "User Data"],
+            "Microsoft Edge Dev":  [local   / "Microsoft" / "Edge Dev" / "User Data"],
+            "Microsoft Edge Canary":[local  / "Microsoft" / "Edge SxS" / "User Data"],
+            "Brave":               [local   / "BraveSoftware" / "Brave-Browser" / "User Data"],
+            "Brave Beta":          [local   / "BraveSoftware" / "Brave-Browser-Beta" / "User Data"],
+            "Brave Nightly":       [local   / "BraveSoftware" / "Brave-Browser-Nightly" / "User Data"],
+            "Vivaldi":             [local   / "Vivaldi" / "User Data"],
+            "Opera":               [roaming / "Opera Software" / "Opera Stable"],
+            "Opera GX":            [roaming / "Opera Software" / "Opera GX Stable"],
+            "Opera Developer":     [roaming / "Opera Software" / "Opera Developer"],
+            "Yandex":              [local   / "Yandex" / "YandexBrowser" / "User Data"],
+        }
+        for name, roots in chromium_roots.items():
+            # Opera places History at the root, not inside a profile subdir.
+            profile_glob = None if "Opera" in name else "*"
+            entries.append({
+                "name": name, "family": "chromium",
+                "user_data_dirs": roots,
+                "profile_glob": profile_glob,
+                "db_filename": "History",
+            })
+        firefox_roots = {
+            "Firefox":     [roaming / "Mozilla" / "Firefox" / "Profiles"],
+            "Waterfox":    [roaming / "Waterfox" / "Profiles"],
+            "LibreWolf":   [roaming / "LibreWolf" / "Profiles"],
+            "Tor Browser": [roaming / "Tor Browser" / "Browser" / "TorBrowser" / "Data" / "Browser"],
+        }
+        for name, roots in firefox_roots.items():
+            entries.append({
+                "name": name, "family": "firefox",
+                "user_data_dirs": roots, "profile_glob": "*",
+                "db_filename": "places.sqlite",
+            })
+
+    return entries
+
+
+def _is_profile_dir(p: Path, family: str) -> bool:
+    """
+    Heuristic: is `p` plausibly a browser profile directory?
+
+    For Chromium, real profiles are named ``Default``, ``Profile 1``, etc.,
+    and contain a ``Preferences`` file. For Firefox, profiles end in
+    ``.default``, ``.default-release``, etc. This filter keeps us from
+    recursing into sibling dirs like ``Crash Reports``, ``ShaderCache`` …
+    """
+    if not p.is_dir():
+        return False
+    if family == "chromium":
+        if p.name in {"Default", "Guest Profile", "System Profile"}:
+            return True
+        if p.name.startswith("Profile "):
+            return True
+        # Any dir carrying a Preferences file is almost certainly a profile.
+        return (p / "Preferences").exists()
+    if family == "firefox":
+        if p.name.endswith(".default") or ".default-" in p.name:
+            return True
+        # Any dir containing a places.sqlite is a profile, period.
+        return (p / "places.sqlite").exists()
+    return True
+
+
+def _discover_browser_history(errors: List[Dict[str, str]]) -> Dict[str, Any]:
+    """
+    Iterate every browser descriptor for this OS, open each History DB found
+    in read-only mode via snapshot-copy, and return:
+
+        {
+          "history":    [ {url, title, visit_count, last_visit_at, browser, profile}, ... ],
+          "by_browser": { "Google Chrome — Default": 412, "Safari": 118, ... },
+          "discovered": [ {browser, profile, path, rows} ],
+        }
+
+    Errors are appended to the caller's `errors` list rather than raised so
+    one locked DB never blocks the rest of the discovery pass.
+    """
+    registry = _browser_registry()
+    history: List[Dict[str, Any]] = []
+    by_browser: Dict[str, int] = {}
+    discovered: List[Dict[str, Any]] = []
+
+    for desc in registry:
+        fam = desc["family"]
+        db_name = desc["db_filename"]
+        profile_glob = desc["profile_glob"]
+        for root in desc["user_data_dirs"]:
+            try:
+                if not root.exists():
+                    continue
+            except OSError:
+                continue
+
+            # Enumerate profile directories inside `root`, or use `root` itself
+            # if the descriptor says the DB sits directly in the root (Opera,
+            # Safari, Tor Browser).
+            if profile_glob is None:
+                profile_paths = [root]
+            else:
+                try:
+                    profile_paths = [p for p in root.iterdir() if _is_profile_dir(p, fam)]
+                except OSError as e:
+                    errors.append({"path": str(root), "error": f"profile enumeration failed: {e}"})
+                    continue
+
+            for prof in profile_paths:
+                db_path = prof / db_name
+                if not db_path.exists() or not db_path.is_file():
+                    continue
+                if not _is_sqlite(db_path):
+                    continue
+                profile_label = prof.name if prof != root else "—"
+                try:
+                    if fam == "chromium":
+                        rows = _parse_chrome_history(db_path)
+                    elif fam == "firefox":
+                        rows = _parse_firefox_history(db_path)
+                    elif fam == "safari":
+                        rows = _parse_safari_history(db_path)
+                    else:
+                        continue
+                except Exception as e:  # defensive — parsers should already trap
+                    errors.append({"path": str(db_path), "error": f"parse failed: {e}"})
+                    continue
+
+                clean = [r for r in rows if isinstance(r, dict) and "url" in r]
+                # Stamp every row with the discovered browser + profile so the
+                # report can break down visits per-source.
+                for r in clean:
+                    r["browser"] = desc["name"]
+                    r["profile"] = profile_label
+                history.extend(clean)
+                label = f"{desc['name']}" + (f" — {profile_label}" if profile_label != "—" else "")
+                by_browser[label] = by_browser.get(label, 0) + len(clean)
+                discovered.append({
+                    "browser": desc["name"],
+                    "profile": profile_label,
+                    "path": str(db_path),
+                    "rows": len(clean),
+                })
+
+    return {"history": history, "by_browser": by_browser, "discovered": discovered}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -594,6 +952,42 @@ def scan(
             findings["errors"].append({"path": str(path), "error": str(e)})
         if on_progress:
             on_progress(i, total)
+
+    # ── System-wide browser-history discovery ──────────────────────────────
+    # Independent of what the investigator asked us to walk. We always check
+    # every supported browser on the host so the report can answer "what did
+    # this user do online?" even when the scan target is, say, Downloads.
+    # Rows from this pass are de-duplicated against any DBs the file walk
+    # happened to surface, keyed on (url, last_visit_at, browser).
+    try:
+        discovery = _discover_browser_history(findings["errors"])
+    except Exception as e:  # pragma: no cover — defensive
+        findings["errors"].append({"path": "<browser-discovery>", "error": str(e)})
+        discovery = {"history": [], "by_browser": {}, "discovered": []}
+
+    seen: set = {
+        (h.get("url"), h.get("last_visit_at"), h.get("browser"))
+        for h in findings["browser_history"]
+    }
+    added = 0
+    for row in discovery["history"]:
+        key = (row.get("url"), row.get("last_visit_at"), row.get("browser"))
+        if key in seen:
+            continue
+        seen.add(key)
+        findings["browser_history"].append(row)
+        added += 1
+
+    findings["summary"]["history_rows"] = len(findings["browser_history"])
+    findings["summary"]["with_history"] = (
+        findings["summary"].get("with_history", 0) + len(discovery["discovered"])
+    )
+    # Per-browser breakdown — surfaced directly in the report's Web Activity
+    # card. We also expose the list of discovered DB paths for the forensic
+    # annex (investigator-only, scrubbed from the client view).
+    findings["summary"]["browsers_discovered"] = len(discovery["discovered"])
+    findings["summary"]["history_by_browser"] = discovery["by_browser"]
+    findings["browser_sources"] = discovery["discovered"]
 
     findings["summary"]["total_files"] = len(findings["files"])
     findings["summary"]["by_type"] = by_type

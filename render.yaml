@@ -16,3 +16,9 @@ services:
         sync: false
       - key: MONGODB_URI
         sync: false
+      # Shared secret the desktop agent sends in the X-API-Key header. Without
+      # this, /api/agent/upload and /api/agent/findings return 503. Generate one
+      # with:  python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # and paste into the Render dashboard → Environment → AGENT_API_KEY.
+      - key: AGENT_API_KEY
+        sync: false
