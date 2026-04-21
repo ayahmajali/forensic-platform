@@ -43,6 +43,16 @@ try:
 except ImportError:  # pragma: no cover - pymongo is pinned in requirements
     _PYMONGO_AVAILABLE = False
 
+# certifi gives us a fresh CA bundle the system OpenSSL can trust.
+# Without this, Debian-bookworm-based Python images sometimes fail the
+# TLS handshake against MongoDB Atlas with "TLSV1_ALERT_INTERNAL_ERROR"
+# because the negotiated cipher/cert chain can't be verified.
+try:
+    import certifi
+    _CA_FILE = certifi.where()
+except ImportError:
+    _CA_FILE = None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CaseStore — the single object the rest of the app talks to.
@@ -102,8 +112,18 @@ class CaseStore:
         except ValueError:
             timeout_ms = 2000
 
+        # For mongodb+srv:// (Atlas) URIs we explicitly enable TLS and, when
+        # certifi is available, point pymongo at its CA bundle. Self-hosted
+        # Mongo over plain mongodb:// isn't affected — TLS only kicks in when
+        # the URI scheme or `tls=true` asks for it.
+        client_kwargs: Dict[str, Any] = {"serverSelectionTimeoutMS": timeout_ms}
+        if uri.startswith("mongodb+srv://") or "tls=true" in uri.lower():
+            client_kwargs["tls"] = True
+            if _CA_FILE:
+                client_kwargs["tlsCAFile"] = _CA_FILE
+
         try:
-            self._client = MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
+            self._client = MongoClient(uri, **client_kwargs)
             # Trigger an actual connection — otherwise pymongo lazily connects.
             self._client.admin.command("ping")
             self._db = self._client[db_name]
