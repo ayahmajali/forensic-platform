@@ -843,6 +843,7 @@ def scan(
     *,
     rar_decision: Optional[RarDecisionFn] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    include_browsers: bool = False,
 ) -> Dict[str, Any]:
     """
     Walk `root` (file or directory), produce a findings dict.
@@ -855,6 +856,13 @@ def scan(
     on_progress
         Optional callable (done, total) invoked after each file so the CLI can
         render a progress bar.
+    include_browsers
+        When True, parse in-tree browser History/places.sqlite files AND run
+        a system-wide discovery pass over Chrome/Edge/Firefox/Brave/Opera
+        profiles. When False (the default), browser databases are simply
+        listed as "browser_db" entries with a note — no parsing, no URLs,
+        no discovery. This lets the investigator run a metadata-only scan
+        on sensitive machines without exposing visited URLs.
     """
     root = root.resolve()
     findings: Dict[str, Any] = {
@@ -912,7 +920,12 @@ def scan(
     total = len(all_paths)
     for i, path in enumerate(all_paths, 1):
         try:
-            entry = _process_file(path, include_rar=include_rar, root=root)
+            entry = _process_file(
+                path,
+                include_rar=include_rar,
+                root=root,
+                include_browsers=include_browsers,
+            )
             if entry is None:
                 continue
             findings["files"].append(entry)
@@ -954,16 +967,23 @@ def scan(
             on_progress(i, total)
 
     # ── System-wide browser-history discovery ──────────────────────────────
-    # Independent of what the investigator asked us to walk. We always check
-    # every supported browser on the host so the report can answer "what did
-    # this user do online?" even when the scan target is, say, Downloads.
-    # Rows from this pass are de-duplicated against any DBs the file walk
+    # Independent of what the investigator asked us to walk. When enabled,
+    # we check every supported browser on the host so the report can answer
+    # "what did this user do online?" even when the scan target is, say,
+    # Downloads. Rows are de-duplicated against any DBs the file walk
     # happened to surface, keyed on (url, last_visit_at, browser).
-    try:
-        discovery = _discover_browser_history(findings["errors"])
-    except Exception as e:  # pragma: no cover — defensive
-        findings["errors"].append({"path": "<browser-discovery>", "error": str(e)})
+    #
+    # Gated by include_browsers (opt-in). A default scan never touches the
+    # user's browser profiles — investigator must explicitly enable it.
+    if include_browsers:
+        try:
+            discovery = _discover_browser_history(findings["errors"])
+        except Exception as e:  # pragma: no cover — defensive
+            findings["errors"].append({"path": "<browser-discovery>", "error": str(e)})
+            discovery = {"history": [], "by_browser": {}, "discovered": []}
+    else:
         discovery = {"history": [], "by_browser": {}, "discovered": []}
+        findings["summary"]["browsers_skipped"] = True
 
     seen: set = {
         (h.get("url"), h.get("last_visit_at"), h.get("browser"))
@@ -994,7 +1014,13 @@ def scan(
     return findings
 
 
-def _process_file(path: Path, *, include_rar: bool, root: Path) -> Optional[Dict[str, Any]]:
+def _process_file(
+    path: Path,
+    *,
+    include_rar: bool,
+    root: Path,
+    include_browsers: bool = False,
+) -> Optional[Dict[str, Any]]:
     """
     Produce a per-file entry. For archive_zip, also recurses into contents
     (up to MAX_FILES globally — caller checks).
@@ -1041,7 +1067,12 @@ def _process_file(path: Path, *, include_rar: bool, root: Path) -> Optional[Dict
         # Parses Chrome/Edge/Brave/Opera `History` and Firefox `places.sqlite`
         # in-place. Returns {browser, history_entries} or {note} when parsing
         # is declined (e.g. Cookies / Login Data for privacy reasons).
-        entry.update(_extract_browser_history(path))
+        # Gated by include_browsers so a privacy-conscious run doesn't expose
+        # visited URLs just because the walker stumbled on a History file.
+        if include_browsers:
+            entry.update(_extract_browser_history(path))
+        else:
+            entry["note"] = "Browser database — parsing skipped (browser history disabled)."
     elif ftype == "sqlite":
         # Generic SQLite file — don't enumerate its tables by default
         # (could contain anything). Flag it so the investigator sees it.

@@ -62,7 +62,7 @@ except ImportError as e:  # pragma: no cover
 
 APP_TITLE = "Forensic Agent"
 APP_VERSION = "1.0.0"
-DEFAULT_BACKEND = os.getenv("FORENSIC_API_URL", "https://forensic-site.onrender.com")
+DEFAULT_BACKEND = os.getenv("FORENSIC_API_URL", "https://forensic-platform-sy5q.onrender.com")
 DEFAULT_API_KEY = os.getenv("FORENSIC_API_KEY", "")
 
 # Match the website palette.
@@ -93,6 +93,24 @@ def _load_scanner():
         except ImportError as e:
             last_exc = e
     raise RuntimeError(f"Could not import scanner module: {last_exc}")
+
+
+def _load_tsk_runner():
+    """
+    Return the tsk_runner module or raise a RuntimeError with a hint.
+
+    Same fallback pattern as _load_scanner — we want this to work whether
+    the user runs `python gui.py` from the repo root, `python agent/gui.py`
+    directly, or the PyInstaller-bundled `.exe` which ships everything
+    into a flat sys._MEIPASS directory.
+    """
+    last_exc = None
+    for modname in ("tsk_runner", "agent.tsk_runner"):
+        try:
+            return __import__(modname, fromlist=["*"])
+        except ImportError as e:
+            last_exc = e
+    raise RuntimeError(f"Could not import tsk_runner module: {last_exc}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,6 +176,19 @@ class ForensicAgentApp(ctk.CTk):
         # Modal RAR decision helpers
         self._rar_decision_event = threading.Event()
         self._rar_decision_value = False
+
+        # Mode: "scan" (walk a folder with scanner.py) vs
+        #       "disk" (run Sleuth Kit on a local disk image via tsk_runner.py).
+        # Picking a folder/file sets it to "scan"; picking a disk image sets
+        # it to "disk". Step 3's Start button dispatches accordingly.
+        self._mode: str = "scan"
+
+        # Opt-in flags that the user toggles before pressing Start.
+        # Tk requires these to live after the root window is constructed,
+        # otherwise BooleanVar complains about "no default root".
+        # Browser history is OFF by default for privacy — investigators who
+        # need it flip the checkbox in Step 2.
+        self._include_browsers = ctk.BooleanVar(value=False)
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -336,14 +367,14 @@ class ForensicAgentApp(ctk.CTk):
     # Step 2 -----------------------------------------------------------------
     def _build_step_folder(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._step_header(card, "2", "Choose what to scan")
+        self._step_header(card, "2", "Choose what to investigate")
 
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="x", padx=24, pady=(0, 20))
         body.grid_columnconfigure(0, weight=1)
 
         self._lbl_folder = ctk.CTkLabel(
-            body, text="No folder selected",
+            body, text="No folder or disk image selected",
             font=ctk.CTkFont(size=13), text_color=COLOR_DIM,
             anchor="w", justify="left",
         )
@@ -363,12 +394,38 @@ class ForensicAgentApp(ctk.CTk):
             fg_color=COLOR_CARD, hover_color=COLOR_PANEL,
             text_color=COLOR_TEXT, font=ctk.CTkFont(size=12, weight="bold"),
             command=self._on_pick_file,
+        ).pack(side="left", padx=(0, 8))
+        # Disk-image mode — routes to tsk_runner (mmls → fsstat → fls →
+        # tsk_recover) instead of the logical scanner. The deleted files
+        # end up on the investigator's Desktop under TheDeletedFiles/.
+        ctk.CTkButton(
+            btn_frame, text="💿  Analyze Disk Image…", height=38, width=180,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+            text_color="white", font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._on_pick_disk_image,
         ).pack(side="left")
+
+        # Options row — below the picker, spans the full width.
+        opts = ctk.CTkFrame(body, fg_color="transparent")
+        opts.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        ctk.CTkCheckBox(
+            opts,
+            text="Include browser history (Chrome / Firefox / Edge / Safari)",
+            variable=self._include_browsers,
+            font=ctk.CTkFont(size=12),
+            text_color=COLOR_TEXT,
+            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            opts,
+            text="— off by default for privacy",
+            font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
+        ).pack(side="left", padx=(8, 0))
 
     # Step 3 -----------------------------------------------------------------
     def _build_step_scan(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._step_header(card, "3", "Run the scan")
+        self._step_header(card, "3", "Run the analysis")
 
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="x", padx=24, pady=(0, 20))
@@ -377,16 +434,19 @@ class ForensicAgentApp(ctk.CTk):
         btn_row = ctk.CTkFrame(body, fg_color="transparent")
         btn_row.pack(fill="x", pady=(0, 12))
 
+        # Button label is updated live by _on_pick_folder / _on_pick_file /
+        # _on_pick_disk_image so the user always sees the action that will
+        # actually run when they click it.
         self._btn_scan = ctk.CTkButton(
-            btn_row, text="▶  Start Scan", height=44, width=180,
+            btn_row, text="▶  Start", height=44, width=220,
             fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
             text_color="white", font=ctk.CTkFont(size=14, weight="bold"),
-            command=self._on_start_scan, state="disabled",
+            command=self._on_start, state="disabled",
         )
         self._btn_scan.pack(side="left")
 
         self._lbl_scan_status = ctk.CTkLabel(
-            btn_row, text="Pick a folder above first.",
+            btn_row, text="Pick a folder or disk image above first.",
             font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
         )
         self._lbl_scan_status.pack(side="left", padx=(16, 0))
@@ -518,10 +578,11 @@ class ForensicAgentApp(ctk.CTk):
         path = filedialog.askdirectory(title="Select a folder to investigate")
         if path:
             self._selected_folder = Path(path)
+            self._mode = "scan"
             self._lbl_folder.configure(
                 text=f"📁  {path}", text_color=COLOR_TEXT,
             )
-            self._btn_scan.configure(state="normal")
+            self._btn_scan.configure(state="normal", text="▶  Start Scan")
             self._lbl_scan_status.configure(
                 text="Ready to scan.", text_color=COLOR_DIM,
             )
@@ -530,13 +591,53 @@ class ForensicAgentApp(ctk.CTk):
         path = filedialog.askopenfilename(title="Select a file")
         if path:
             self._selected_folder = Path(path)
+            self._mode = "scan"
             self._lbl_folder.configure(
                 text=f"📄  {path}", text_color=COLOR_TEXT,
             )
-            self._btn_scan.configure(state="normal")
+            self._btn_scan.configure(state="normal", text="▶  Start Scan")
             self._lbl_scan_status.configure(
                 text="Ready to scan.", text_color=COLOR_DIM,
             )
+
+    def _on_pick_disk_image(self) -> None:
+        """
+        Pick a disk-image file (.dd / .e01 / .raw / .img / .iso / .vmdk) and
+        switch into Sleuth Kit mode. The Start button now kicks off
+        `_disk_worker` which runs mmls → fsstat → fls → tsk_recover via
+        tsk_runner.LocalTSKRunner and recovers deleted files to the user's
+        Desktop\\TheDeletedFiles folder.
+        """
+        path = filedialog.askopenfilename(
+            title="Select a disk image",
+            filetypes=[
+                ("Disk images", "*.dd *.raw *.img *.iso *.vmdk *.e01 *.E01"),
+                ("Raw disk image (.dd)", "*.dd"),
+                ("Raw disk image (.raw)", "*.raw"),
+                ("EnCase image (.e01)", "*.e01 *.E01"),
+                ("ISO image", "*.iso"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+        self._selected_folder = Path(path)
+        self._mode = "disk"
+        self._lbl_folder.configure(
+            text=f"💿  {path}", text_color=COLOR_TEXT,
+        )
+        self._btn_scan.configure(state="normal", text="💿  Analyze Disk Image")
+        self._lbl_scan_status.configure(
+            text="Ready to run Sleuth Kit on this image.",
+            text_color=COLOR_DIM,
+        )
+
+    def _on_start(self) -> None:
+        """Dispatch Start to the right worker based on current mode."""
+        if self._mode == "disk":
+            self._on_start_disk_analysis()
+        else:
+            self._on_start_scan()
 
     def _on_start_scan(self) -> None:
         if not self._selected_folder:
@@ -558,11 +659,57 @@ class ForensicAgentApp(ctk.CTk):
         self._lbl_scan_status.configure(
             text="Walking the folder…", text_color=COLOR_ACCENT,
         )
+        self._lbl_current.configure(text="")
         self._set_chip("● Scanning", COLOR_ACCENT)
 
-        # Kick off scanner in a thread.
+        # Kick off scanner in a thread, passing the browser-history opt-in
+        # so the scanner knows whether to parse browser DBs or skip them.
+        include_browsers = bool(self._include_browsers.get())
         self._scan_thread = threading.Thread(
             target=self._scan_worker,
+            args=(self._selected_folder, include_browsers),
+            daemon=True,
+        )
+        self._scan_thread.start()
+
+    def _on_start_disk_analysis(self) -> None:
+        """
+        Kick off a local Sleuth Kit analysis of the selected disk image.
+
+        We do all of the heavy lifting locally so raw evidence never leaves
+        the investigator's machine. Only the JSON findings (and a list of
+        recovered deleted filenames, NOT their contents) get POSTed to the
+        backend afterwards if the user chooses to submit.
+        """
+        if not self._selected_folder:
+            messagebox.showwarning(APP_TITLE, "Pick a disk image first.")
+            return
+        if self._scan_thread and self._scan_thread.is_alive():
+            return
+        if not self._selected_folder.exists():
+            messagebox.showerror(
+                APP_TITLE, f"Disk image no longer exists:\n{self._selected_folder}",
+            )
+            return
+
+        # Reset UI
+        self._progress.set(0)
+        self._set_counter(self._lbl_counter_files, "0")
+        self._set_counter(self._lbl_counter_errors, "0")
+        self._set_counter(self._lbl_counter_images, "1")
+        self._clear_summary()
+        self._clear_case()
+        self._findings = None
+        self._case_id = None
+        self._btn_scan.configure(state="disabled", text="Analyzing…")
+        self._lbl_scan_status.configure(
+            text="Running Sleuth Kit…", text_color=COLOR_ACCENT,
+        )
+        self._lbl_current.configure(text="")
+        self._set_chip("● Analyzing", COLOR_ACCENT)
+
+        self._scan_thread = threading.Thread(
+            target=self._disk_worker,
             args=(self._selected_folder,),
             daemon=True,
         )
@@ -610,7 +757,7 @@ class ForensicAgentApp(ctk.CTk):
     # Background workers — must not touch Tk directly, use the queue.
     # ─────────────────────────────────────────────────────────────────────
 
-    def _scan_worker(self, root: Path) -> None:
+    def _scan_worker(self, root: Path, include_browsers: bool = False) -> None:
         try:
             scanner = _load_scanner()
         except RuntimeError as e:
@@ -637,13 +784,119 @@ class ForensicAgentApp(ctk.CTk):
                 root,
                 rar_decision=rar_decision,
                 on_progress=on_progress,
+                include_browsers=include_browsers,
             )
+            # Echo the opt-in back into findings so the backend report knows
+            # whether the absence of browser history is "nothing found" or
+            # "user opted out". This keeps the signal explicit on the wire.
+            findings["include_browsers"] = include_browsers
             self._q.put(("scan_done", {"findings": findings}))
         except Exception as e:
             import traceback
             self._q.put(("scan_error", {
                 "error": f"{e}\n\n{traceback.format_exc()}",
             }))
+
+    def _disk_worker(self, image_path: Path) -> None:
+        """
+        Run Sleuth Kit locally against a single disk image.
+
+        Heavy lifting (mmls / fsstat / fls -rd / tsk_recover -e) all happens
+        in this thread so the Tk event loop stays responsive. Progress is
+        funnelled back to the main thread via the event queue — see
+        `_handle_event` for the "disk_*" branches.
+
+        Recovered deleted files land on the investigator's Desktop under
+        `TheDeletedFiles/<image_stem>/` so they can open the folder
+        immediately from the summary panel.
+        """
+        try:
+            tsk = _load_tsk_runner()
+        except RuntimeError as e:
+            self._q.put(("scan_error", {"error": str(e)}))
+            return
+
+        # Fail fast with a friendly message if the TSK binaries are missing
+        # from the PyInstaller bundle AND the system PATH. This is much
+        # better than letting subprocess blow up 200 lines deeper.
+        try:
+            runner = tsk.LocalTSKRunner(image_path)
+            if not runner.is_available:
+                self._q.put(("scan_error", {
+                    "error": (
+                        "Sleuth Kit is not available on this machine.\n\n"
+                        f"{runner.why_missing()}\n\n"
+                        "Windows: place the .exe binaries in agent/vendor/tsk/ "
+                        "before building, or install Sleuth Kit and add it to PATH.\n"
+                        "macOS:   brew install sleuthkit\n"
+                        "Linux:   apt-get install sleuthkit"
+                    ),
+                }))
+                return
+        except Exception as e:
+            self._q.put(("scan_error", {"error": f"TSK runner init failed: {e}"}))
+            return
+
+        # Forward log lines from the runner to the status label so the user
+        # sees which TSK tool is running. `on_log` is called on the worker
+        # thread, so we route through the event queue.
+        def on_log(line: str) -> None:
+            self._q.put(("disk_log", {"text": line}))
+
+        # Desktop recovery folder: %USERPROFILE%\Desktop\TheDeletedFiles\
+        # on Windows, ~/Desktop/TheDeletedFiles/ elsewhere. tsk_runner
+        # picks the right one and creates per-image subdirectories.
+        try:
+            root_out = tsk.desktop_deleted_files_dir()
+            out_dir = root_out / image_path.stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self._q.put(("scan_error", {
+                "error": f"Could not create recovery directory: {e}",
+            }))
+            return
+
+        try:
+            report = runner.analyse(out_dir, on_log=on_log, deleted_only=True)
+        except Exception as e:
+            import traceback
+            self._q.put(("scan_error", {
+                "error": f"{e}\n\n{traceback.format_exc()}",
+            }))
+            return
+
+        # Wrap the TSK report in a findings-shaped dict so the rest of the
+        # pipeline (submit button, backend ingestion, summary renderer)
+        # doesn't need to know a disk image was analysed differently.
+        #
+        # tsk_runner returns filesystem info under `fsstat` — we mirror it
+        # to `filesystem` in findings so the backend template and the
+        # GUI summary have a predictable key to look under.
+        fsstat = report.get("fsstat", {}) or {}
+        errors = [report["error"]] if report.get("error") else []
+        findings: Dict[str, Any] = {
+            "agent_version": APP_VERSION,
+            "platform": platform.platform(),
+            "scan_root": str(image_path),
+            "analysis_type": "disk_image",
+            "tsk_disk_analysis": report,
+            "recovery_path": str(out_dir),
+            "deleted_files": report.get("deleted_files", []),
+            "recovered_files": report.get("recovered_files", []),
+            "summary": {
+                "total_files": len(report.get("deleted_files", [])),
+                "total_size_bytes": 0,
+                "by_type": {"deleted_file": len(report.get("deleted_files", []))},
+                "disk_image": image_path.name,
+                "partitions": len(report.get("partitions", [])),
+                "filesystem": fsstat,
+                "recovered_count": report.get("recovered_count", 0),
+                "deleted_total": report.get("total_deleted", 0),
+            },
+            "errors": errors,
+            "include_browsers": False,
+        }
+        self._q.put(("scan_done", {"findings": findings, "mode": "disk"}))
 
     def _submit_worker(
         self,
@@ -787,6 +1040,23 @@ class ForensicAgentApp(ctk.CTk):
             )
             self._set_counter(self._lbl_counter_files, f"{p['done']:,}")
 
+        elif name == "disk_log":
+            # TSK runner emits a log line per tool invocation / partition.
+            # Mirror it into the "current file" label so the user has some
+            # sign of life during long tsk_recover runs.
+            self._lbl_current.configure(
+                text=p.get("text", ""), text_color=COLOR_DIM,
+            )
+            # Nudge the indeterminate progress bar forward in small steps —
+            # we don't know the real fraction for TSK, but any movement
+            # beats a frozen bar.
+            try:
+                cur = float(self._progress.get())
+                if cur < 0.9:
+                    self._progress.set(min(cur + 0.05, 0.9))
+            except Exception:
+                pass
+
         elif name == "rar_prompt":
             self._show_rar_dialog(p["path"], p["count"])
 
@@ -794,27 +1064,44 @@ class ForensicAgentApp(ctk.CTk):
             self._findings = p["findings"]
             self._progress.set(1)
             summary = p["findings"].get("summary", {})
-            self._lbl_scan_status.configure(
-                text=f"✓ Scan complete — {summary.get('total_files', 0):,} files processed.",
-                text_color=COLOR_SUCCESS,
-            )
-            self._set_counter(self._lbl_counter_files, f"{summary.get('total_files', 0):,}")
-            self._set_counter(self._lbl_counter_errors, str(len(p["findings"].get("errors", []))))
-            self._set_counter(
-                self._lbl_counter_images,
-                str(len(p["findings"].get("images_to_upload", []))),
-            )
-            self._btn_scan.configure(state="normal", text="▶  Scan Again")
-            self._set_chip("● Scan done", COLOR_SUCCESS)
+            is_disk = p["findings"].get("analysis_type") == "disk_image"
+            if is_disk:
+                deleted_n = len(p["findings"].get("deleted_files", []))
+                recovered_n = summary.get("recovered_count", 0)
+                self._lbl_scan_status.configure(
+                    text=f"✓ Sleuth Kit analysis complete — {deleted_n:,} deleted "
+                         f"entries found, {recovered_n:,} recovered to Desktop.",
+                    text_color=COLOR_SUCCESS,
+                )
+                self._set_counter(self._lbl_counter_files, f"{deleted_n:,}")
+                self._set_counter(self._lbl_counter_errors,
+                                  str(len(p["findings"].get("errors", []))))
+                self._set_counter(self._lbl_counter_images, "1")
+                self._btn_scan.configure(state="normal", text="💿  Analyze Again")
+            else:
+                self._lbl_scan_status.configure(
+                    text=f"✓ Scan complete — {summary.get('total_files', 0):,} files processed.",
+                    text_color=COLOR_SUCCESS,
+                )
+                self._set_counter(self._lbl_counter_files, f"{summary.get('total_files', 0):,}")
+                self._set_counter(self._lbl_counter_errors, str(len(p["findings"].get("errors", []))))
+                self._set_counter(
+                    self._lbl_counter_images,
+                    str(len(p["findings"].get("images_to_upload", []))),
+                )
+                self._btn_scan.configure(state="normal", text="▶  Scan Again")
+            self._set_chip("● Done", COLOR_SUCCESS)
             self._render_summary(p["findings"])
 
         elif name == "scan_error":
-            self._btn_scan.configure(state="normal", text="▶  Start Scan")
+            # Restore a sensible button label for the current mode.
+            restore_text = "💿  Analyze Disk Image" if self._mode == "disk" else "▶  Start Scan"
+            self._btn_scan.configure(state="normal", text=restore_text)
             self._lbl_scan_status.configure(
-                text="✗ Scan failed — see dialog.", text_color=COLOR_DANGER,
+                text="✗ Analysis failed — see dialog.", text_color=COLOR_DANGER,
             )
             self._set_chip("● Error", COLOR_DANGER)
-            messagebox.showerror(APP_TITLE, f"Scan failed:\n\n{p['error']}")
+            messagebox.showerror(APP_TITLE, f"Analysis failed:\n\n{p['error']}")
 
         elif name == "submit_progress":
             # Fired during phase-2 disk image uploads so the user sees
@@ -922,13 +1209,31 @@ class ForensicAgentApp(ctk.CTk):
         s = findings.get("summary", {})
         by_type = s.get("by_type", {})
 
+        # Disk-image analyses get a dedicated panel up top with the Sleuth
+        # Kit filesystem summary, the deleted files list, and a shortcut
+        # to open the recovery folder on the Desktop.
+        if findings.get("analysis_type") == "disk_image":
+            self._render_disk_summary(findings)
+
         # Cards row — top-level stats
         stats = ctk.CTkFrame(self._summary_body, fg_color="transparent")
         stats.pack(fill="x", pady=(0, 16))
-        self._stat_card(stats, "Total Files", f"{s.get('total_files', 0):,}")
-        self._stat_card(stats, "Total Size", _fmt_size(s.get("total_size_bytes", 0)))
-        self._stat_card(stats, "With Metadata", f"{s.get('with_exif', 0):,}")
-        self._stat_card(stats, "Text Extracted", f"{s.get('with_text', 0):,}")
+        if findings.get("analysis_type") == "disk_image":
+            tsk = findings.get("tsk_disk_analysis", {})
+            self._stat_card(stats, "Deleted Files",
+                            f"{len(findings.get('deleted_files', [])):,}")
+            self._stat_card(stats, "Recovered",
+                            f"{tsk.get('recovered_count', 0):,}")
+            self._stat_card(stats, "Partitions",
+                            f"{len(tsk.get('partitions', [])):,}")
+            fs = tsk.get("fsstat") or {}
+            self._stat_card(stats, "Filesystem",
+                            fs.get("fs_type", "—") or "—")
+        else:
+            self._stat_card(stats, "Total Files", f"{s.get('total_files', 0):,}")
+            self._stat_card(stats, "Total Size", _fmt_size(s.get("total_size_bytes", 0)))
+            self._stat_card(stats, "With Metadata", f"{s.get('with_exif', 0):,}")
+            self._stat_card(stats, "Text Extracted", f"{s.get('with_text', 0):,}")
 
         # By-type grid
         if by_type:
@@ -946,7 +1251,12 @@ class ForensicAgentApp(ctk.CTk):
                 )
 
         # Disk images & RAR warnings
+        # Skip the "also upload the disk image to the server" prompt in
+        # disk-image mode — we've already done a full local TSK analysis,
+        # and re-uploading the image would just repeat work server-side.
         imgs = findings.get("images_to_upload", [])
+        if findings.get("analysis_type") == "disk_image":
+            imgs = []
         # Default: off — uploading a multi-GB disk image over a cold-start
         # free-tier backend can time out. Investigator opts in explicitly.
         self._opt_upload_images = ctk.BooleanVar(value=False)
@@ -1016,6 +1326,151 @@ class ForensicAgentApp(ctk.CTk):
             font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
         )
         self._lbl_submit_status.pack(side="left", padx=(16, 0))
+
+    def _render_disk_summary(self, findings: Dict[str, Any]) -> None:
+        """
+        Top-of-summary panel for disk-image analyses: partitions, filesystem
+        info, a "reveal recovery folder" button, and the list of deleted
+        filenames with their recovery status.
+        """
+        tsk = findings.get("tsk_disk_analysis", {})
+        recovery_path = findings.get("recovery_path") or ""
+        deleted = findings.get("deleted_files", []) or []
+
+        # Header card: big success banner + recovery path + open button.
+        banner = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=12)
+        banner.pack(fill="x", pady=(0, 12))
+
+        ctk.CTkLabel(
+            banner,
+            text=f"💿  Sleuth Kit analysis complete",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=COLOR_SUCCESS,
+        ).pack(anchor="w", padx=16, pady=(12, 4))
+
+        img_name = findings.get("summary", {}).get("disk_image", "(unknown)")
+        ctk.CTkLabel(
+            banner,
+            text=f"Image: {img_name}   ·   "
+                 f"{len(tsk.get('partitions', []))} partition(s)   ·   "
+                 f"{len(deleted):,} deleted file(s) recovered to Desktop",
+            font=ctk.CTkFont(size=12), text_color=COLOR_DIM,
+            justify="left", wraplength=760,
+        ).pack(anchor="w", padx=16, pady=(0, 6))
+
+        if recovery_path:
+            ctk.CTkLabel(
+                banner,
+                text=f"📂  {recovery_path}",
+                font=ctk.CTkFont(size=11, family="monospace"),
+                text_color=COLOR_ACCENT,
+            ).pack(anchor="w", padx=16, pady=(0, 10))
+
+            btn_row = ctk.CTkFrame(banner, fg_color="transparent")
+            btn_row.pack(anchor="w", padx=16, pady=(0, 14))
+
+            def open_folder() -> None:
+                """Open the recovery folder in the native file manager."""
+                target = recovery_path
+                try:
+                    if platform.system() == "Windows":
+                        os.startfile(target)  # type: ignore[attr-defined]
+                    elif platform.system() == "Darwin":
+                        import subprocess
+                        subprocess.Popen(["open", target])
+                    else:
+                        import subprocess
+                        subprocess.Popen(["xdg-open", target])
+                except Exception as e:
+                    messagebox.showerror(APP_TITLE, f"Could not open folder:\n{e}")
+
+            ctk.CTkButton(
+                btn_row, text="📂  Open TheDeletedFiles Folder",
+                height=38, width=260,
+                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                text_color="white", font=ctk.CTkFont(size=12, weight="bold"),
+                command=open_folder,
+            ).pack(side="left", padx=(0, 8))
+
+        # Per-partition filesystem detail (from fsstat).
+        fs = tsk.get("fsstat") or {}
+        if fs:
+            fs_box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
+            fs_box.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(
+                fs_box, text="Filesystem",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=COLOR_DIM,
+            ).pack(anchor="w", padx=12, pady=(10, 2))
+            lines = []
+            for k, label in (
+                ("fs_type", "Type"),
+                ("volume_name", "Label"),
+                ("last_mount", "Last Mount"),
+                ("block_size", "Block Size"),
+                ("block_count", "Block Count"),
+            ):
+                v = fs.get(k)
+                if v:
+                    lines.append(f"{label}: {v}")
+            ctk.CTkLabel(
+                fs_box, text="   ·   ".join(lines) or "—",
+                font=ctk.CTkFont(size=11, family="monospace"),
+                text_color=COLOR_TEXT, justify="left",
+            ).pack(anchor="w", padx=12, pady=(0, 10))
+
+        # The deleted-files list — this is the payoff the user asked for:
+        # "tell me exactly which files were deleted". Show up to 200 and
+        # truncate the rest so a huge image doesn't hang the UI.
+        if deleted:
+            # Build a set of recovered basenames so we can mark each fls
+            # entry with ✓ when its bytes are on disk in TheDeletedFiles.
+            # fls gives us the original filesystem path; tsk_recover puts
+            # the recovered bytes into subdirs keyed by the original path,
+            # so matching on basename is a good-enough heuristic for the UI.
+            recovered_files = findings.get("recovered_files", []) or []
+            recovered_basenames = {
+                (r.get("name") or "").lower() for r in recovered_files
+            }
+
+            list_box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
+            list_box.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(
+                list_box,
+                text=f"🗑  Deleted files ({len(deleted):,})",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=COLOR_WARN,
+            ).pack(anchor="w", padx=12, pady=(10, 4))
+
+            # Embed a read-only CTkTextbox instead of a pile of labels —
+            # O(1) widgets regardless of file count, and the user can
+            # copy/paste entries straight out.
+            tbx = ctk.CTkTextbox(
+                list_box, height=240, fg_color=COLOR_BG,
+                text_color=COLOR_TEXT, font=ctk.CTkFont(size=11, family="monospace"),
+                wrap="none",
+            )
+            tbx.pack(fill="x", padx=12, pady=(0, 10))
+            max_rows = 200
+            for entry in deleted[:max_rows]:
+                inode = str(entry.get("inode") or "?")
+                name = entry.get("name") or "(unnamed)"
+                base = name.rsplit("/", 1)[-1].lower()
+                recovered_mark = "✓" if base in recovered_basenames else "·"
+                tbx.insert("end", f"{recovered_mark}  {inode:>14}  {name}\n")
+            if len(deleted) > max_rows:
+                tbx.insert(
+                    "end",
+                    f"\n… and {len(deleted) - max_rows:,} more — "
+                    f"see the recovery folder or the findings JSON.\n",
+                )
+            tbx.configure(state="disabled")
+
+            ctk.CTkLabel(
+                list_box,
+                text="✓ = recovered to disk   ·   · = metadata only (bytes not carved)",
+                font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
+            ).pack(anchor="w", padx=12, pady=(0, 10))
 
     def _stat_card(self, parent, label: str, value: str) -> None:
         card = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=10)

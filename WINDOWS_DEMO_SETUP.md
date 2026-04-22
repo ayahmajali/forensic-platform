@@ -14,7 +14,7 @@ everything happens from the public URL.
 ```
  ┌─────────────────┐   HTTPS    ┌──────────────────────────────┐
  │ Windows VM      │─────────▶  │ Render                        │
- │ (Parallels)     │   scan     │ forensic-site.onrender.com    │
+ │ (Parallels)     │   scan     │ forensic-platform-sy5q.onrender.com    │
  │                 │◀─────────  │  • /download-agent             │
  │ ForensicAgent.  │   report    │  • /api/agent/findings         │
  │ exe             │            │  • /case/{id}   (HTML report)  │
@@ -124,7 +124,7 @@ When it finishes, test it from the VM:
 ```
 
 A window titled **"Forensic Agent 1.0.0"** should open. The **Backend URL**
-field should pre-fill with `https://forensic-site.onrender.com`.
+field should pre-fill with `https://forensic-platform-sy5q.onrender.com`.
 
 ### Troubleshooting
 
@@ -140,7 +140,7 @@ field should pre-fill with `https://forensic-site.onrender.com`.
 ## 3. Publish the `.exe` to the live site (one-time, ~2 min)
 
 Now commit the Windows binaries and push. Render will redeploy automatically
-and start serving the `.exe` from `https://forensic-site.onrender.com/api/agent/download/windows`.
+and start serving the `.exe` from `https://forensic-platform-sy5q.onrender.com/api/agent/download/windows`.
 
 ```powershell
 cd $HOME\forensic-platform
@@ -159,7 +159,7 @@ git push origin main
 
 Wait 2–3 minutes, then verify:
 
-1. Open <https://forensic-site.onrender.com/download-agent> in any browser.
+1. Open <https://forensic-platform-sy5q.onrender.com/download-agent> in any browser.
 2. Click **Download for Windows**.
 3. The browser should download `ForensicAgent-windows.exe` (~28–35 MB).
 
@@ -212,7 +212,7 @@ The flow you'll walk the professors through:
 
 > "This is the portal. Any investigator can download our agent from here."
 
-- Visit <https://forensic-site.onrender.com> in Edge.
+- Visit <https://forensic-platform-sy5q.onrender.com> in Edge.
 - Click **Download Agent** in the top nav.
 - Show the download page — point out macOS/Windows cards, supported file
   types, install instructions.
@@ -250,9 +250,9 @@ The flow you'll walk the professors through:
 
 If you have time and want to show depth:
 
-- `https://forensic-site.onrender.com/results/{case_id}` — the raw JSON.
-- `https://forensic-site.onrender.com/timeline/{case_id}` — the timeline JSON.
-- `https://forensic-site.onrender.com/api/health` — server status.
+- `https://forensic-platform-sy5q.onrender.com/results/{case_id}` — the raw JSON.
+- `https://forensic-platform-sy5q.onrender.com/timeline/{case_id}` — the timeline JSON.
+- `https://forensic-platform-sy5q.onrender.com/api/health` — server status.
 
 ---
 
@@ -263,8 +263,8 @@ any — demo bugs always happen on the thing you didn't rehearse.
 
 - [ ] Render dashboard: `AGENT_API_KEY` is set
 - [ ] Render dashboard: latest deploy is green (no red crosses)
-- [ ] `https://forensic-site.onrender.com/api/health` returns 200
-- [ ] `https://forensic-site.onrender.com/download-agent` renders correctly
+- [ ] `https://forensic-platform-sy5q.onrender.com/api/health` returns 200
+- [ ] `https://forensic-platform-sy5q.onrender.com/download-agent` renders correctly
 - [ ] **Windows:** click Download for Windows → `.exe` downloads (not a 404)
 - [ ] **Windows:** double-click the downloaded .exe → GUI opens
 - [ ] **Windows:** full end-to-end scan of `C:\DemoEvidence` → Case ID shown

@@ -27,7 +27,7 @@ Usage
 
 Environment variables
 ---------------------
-    FORENSIC_API_URL      Backend URL                (default: https://forensic-site.onrender.com)
+    FORENSIC_API_URL      Backend URL                (default: https://forensic-platform-sy5q.onrender.com)
     FORENSIC_API_KEY      Agent API key              (required for upload)
 """
 
@@ -41,7 +41,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # Local scanner module (sits next to this file). Imported lazily inside the
 # scan command to keep other subcommands usable even if scanner.py is absent.
@@ -72,7 +72,7 @@ except ImportError as e:  # pragma: no cover
 # .exe / binary works out of the box — professors / end users shouldn't need
 # to set any environment variables. Developers running a local backend can
 # override with FORENSIC_API_URL=http://localhost:8000 or --api-url.
-DEFAULT_API_URL = "https://forensic-site.onrender.com"
+DEFAULT_API_URL = "https://forensic-platform-sy5q.onrender.com"
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
 
@@ -344,6 +344,16 @@ def upload(
     ),
 )
 @click.option(
+    "--include-browsers/--no-include-browsers",
+    "include_browsers",
+    default=False,
+    help=(
+        "Parse Chrome/Edge/Firefox/Brave/Opera history databases AND run "
+        "system-wide browser discovery. Default: OFF — no visited URLs are "
+        "collected unless explicitly enabled."
+    ),
+)
+@click.option(
     "--watch",
     is_flag=True,
     default=False,
@@ -365,6 +375,7 @@ def scan(
     output_json: Optional[Path],
     include_rar: Optional[bool],
     upload_images: bool,
+    include_browsers: bool,
     watch: bool,
     download_report: Optional[Path],
 ) -> None:
@@ -432,9 +443,15 @@ def scan(
         if done >= total:
             bar["pbar"].close()
 
-    findings = scanner.scan(path, rar_decision=_rar_callback, on_progress=_progress)
+    findings = scanner.scan(
+        path,
+        rar_decision=_rar_callback,
+        on_progress=_progress,
+        include_browsers=include_browsers,
+    )
     findings["investigator"] = investigator
     findings["keywords"] = [k.strip() for k in keywords.split(",") if k.strip()]
+    findings["include_browsers"] = include_browsers
 
     summary = findings.get("summary", {})
     by_type = summary.get("by_type", {})
@@ -530,6 +547,176 @@ def _upload_one(
         return
     cid = resp.json().get("case_id")
     click.secho(f"  ✓ {path.name} → case {cid}", fg="green")
+
+
+@cli.command("disk")
+@click.argument(
+    "image",
+    type=click.Path(exists=True, dir_okay=False, file_okay=True, path_type=Path),
+)
+@click.option(
+    "--output",
+    type=click.Path(dir_okay=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Where to drop recovered deleted files. "
+         "Default: ~/Desktop/TheDeletedFiles (on Windows, also honours OneDrive Desktop).",
+)
+@click.option(
+    "--include-allocated",
+    is_flag=True,
+    default=False,
+    help="Recover every file on the image, not just deleted/unallocated ones.",
+)
+@click.option(
+    "--no-submit",
+    is_flag=True,
+    default=False,
+    help="Skip uploading findings to the backend. Useful for fully-offline analysis.",
+)
+@click.option("--api-url", default=None, help="Backend URL (env: FORENSIC_API_URL).")
+@click.option("--api-key", default=None, help="Agent API key (env: FORENSIC_API_KEY).")
+@click.option(
+    "--investigator",
+    default=None,
+    help="Investigator name recorded on the case (default: OS username).",
+)
+def disk(
+    image: Path,
+    output: Optional[Path],
+    include_allocated: bool,
+    no_submit: bool,
+    api_url: Optional[str],
+    api_key: Optional[str],
+    investigator: Optional[str],
+) -> None:
+    """
+    Analyse a disk image LOCALLY with The Sleuth Kit.
+
+    Runs mmls → fsstat → fls -rd → tsk_recover against the image, lists every
+    deleted file by name and inode, and extracts them to
+    ~/Desktop/TheDeletedFiles/ (override with --output).
+
+    When a backend URL + API key are configured, the structured findings are
+    also POSTed to /api/agent/findings so the polished /case/{id} HTML
+    report picks them up. Use --no-submit to stay entirely offline.
+    """
+    # Import lazily — tsk_runner pulls in subprocess helpers + regex parsers.
+    try:
+        from tsk_runner import LocalTSKRunner, desktop_deleted_files_dir  # type: ignore
+    except ImportError:
+        from agent.tsk_runner import LocalTSKRunner, desktop_deleted_files_dir  # type: ignore
+
+    out_dir = output or desktop_deleted_files_dir()
+
+    click.secho(f"Analysing {image} with The Sleuth Kit …", fg="cyan")
+    runner = LocalTSKRunner(image)
+    if not runner.is_available:
+        raise click.ClickException(runner.why_missing())
+
+    result = runner.analyse(
+        out_dir,
+        on_log=lambda m: click.echo(f"  {m}"),
+        deleted_only=not include_allocated,
+    )
+
+    s = result.get("summary", {})
+    click.echo("")
+    click.secho("── TSK summary ──────────────────────────────", fg="cyan")
+    click.echo(f"  Image       : {s.get('image')}")
+    click.echo(f"  Partitions  : {s.get('partitions')}")
+    click.echo(f"  FS type     : {s.get('fs_type')}")
+    click.echo(f"  Deleted rec : {s.get('deleted_total')} file record(s) in fls -rd")
+    click.echo(f"  Recovered   : {s.get('recovered_total')} file(s) written to disk")
+    click.echo(f"  Drop folder : {s.get('output_dir')}")
+
+    # Preview the first few deleted files so the investigator knows
+    # what to expect in the folder.
+    deleted = result.get("deleted_files") or []
+    if deleted:
+        click.echo("")
+        click.secho("  First deleted entries (inode → name):", fg="cyan")
+        for d in deleted[:10]:
+            click.echo(f"    {d.get('inode')}  →  {d.get('name')}")
+        if len(deleted) > 10:
+            click.echo(f"    … and {len(deleted) - 10} more")
+
+    if no_submit:
+        click.secho("\n✓ Local analysis complete — --no-submit, skipping backend.", fg="green")
+        return
+
+    # ── Submit as a findings package so the Render /case/{id} page renders ──
+    base_url = _api_url(api_url)
+    key = _api_key(api_key)
+    investigator = (
+        investigator
+        or os.environ.get("USER")
+        or os.environ.get("USERNAME")
+        or "agent"
+    )
+
+    # Shape the findings to match the agent's existing contract. The backend
+    # picks up tsk_disk_analysis and surfaces it in the Disk Image Analysis
+    # section of the client report.
+    findings: Dict[str, Any] = {
+        "scanner_version": "1.0.0",
+        "host": {
+            "os": f"{sys.platform}",
+            "user": investigator,
+            "hostname": os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "unknown",
+        },
+        "root": str(image),
+        "scanned_at": _now_iso(),
+        "investigator": investigator,
+        "keywords": [],
+        "include_browsers": False,
+        "files": [],
+        "images_to_upload": [],
+        "rar_files": [],
+        "browser_history": [],
+        "videos": [],
+        "errors": [],
+        "tsk_disk_analysis": result,
+        "summary": {
+            "total_files": result.get("recovered_count", 0),
+            "total_size_bytes": sum(r.get("size", 0) for r in result.get("recovered_files", [])),
+            "by_type": {"recovered_from_disk_image": result.get("recovered_count", 0)},
+            "with_exif": 0,
+            "with_text": 0,
+            "with_history": 0,
+            "history_rows": 0,
+            "deleted_files_total": result.get("total_deleted", 0),
+            "deleted_files_recovered": result.get("recovered_count", 0),
+            "truncated": False,
+        },
+    }
+
+    url = f"{base_url}/api/agent/findings"
+    click.echo(f"\nSubmitting TSK findings to {url} …")
+    try:
+        resp = requests.post(
+            url,
+            headers={**_headers(key), "Content-Type": "application/json"},
+            data=json.dumps(findings, default=str),
+            timeout=120,
+        )
+    except requests.RequestException as e:
+        raise click.ClickException(f"Network error contacting backend: {e}")
+
+    if resp.status_code >= 400:
+        raise click.ClickException(
+            f"Submission failed ({resp.status_code}): {resp.text[:500]}"
+        )
+    payload = resp.json()
+    case_id = payload.get("case_id")
+    click.secho(f"✓ Findings submitted. Case ID: {case_id}", fg="green")
+    click.echo(f"  Report     : {base_url}/case/{case_id}")
+    click.echo(f"  PDF        : {base_url}/api/report/{case_id}/pdf")
+
+
+def _now_iso() -> str:
+    """Return current UTC timestamp in ISO-8601 form (with 'Z' suffix)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @cli.command("status")
