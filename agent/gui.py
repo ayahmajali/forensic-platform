@@ -1,23 +1,30 @@
 """
-gui.py — Graphical interface for the Forensic Agent.
+gui.py — Forensic Agent desktop GUI.
 
-A native desktop application built with CustomTkinter that lets an
-investigator point at a folder, watch a local forensic scan run, decide
-what to do about RAR archives, and submit the findings to the backend
-for report generation — all without touching a terminal.
+A native CustomTkinter app that lets an investigator point at a folder
+of evidence and get back a complete forensic picture:
 
-Design choices
---------------
-* CustomTkinter is Tkinter under the hood, so RAM/CPU footprint is tiny
-  and the app uses the OS's own widget toolkit. The modern dark skin
-  gives it a 2026 look without the weight of Qt.
-* All scanning happens in a background `threading.Thread` so the UI
-  stays responsive. Progress updates are posted to the main thread via
-  `widget.after(0, ...)` — Tk widgets are not thread-safe otherwise.
-* The scanner module is imported lazily so the GUI can still launch
-  (and show an actionable error) on a machine with missing deps.
-* No evidence bytes leave the machine. Only the JSON findings package
-  is POSTed to the backend. This is explained to the user in the UI.
+    • Inventory every file with MD5 / SHA-256 hashes.
+    • Pull EXIF, document text, video metadata, browser history
+      (the last one opt-in for privacy).
+    • Auto-detect disk images (.dd / .e01 / .raw / .img / .iso / .vmdk)
+      nested inside the evidence folder and run the full Sleuth Kit
+      pipeline on each of them locally — mmls → fsstat → fls → tsk_recover.
+    • Recover any deleted files to Desktop\\TheDeletedFiles\\<image>\\.
+    • Surface a "recently modified" view with MAC timestamps so the
+      investigator can spot what moved on the suspect machine.
+    • Ship the structured findings JSON to the backend for reporting.
+
+Design notes
+------------
+* All work happens in a background `threading.Thread`; Tk widgets are
+  only ever touched on the main thread via a `queue.Queue` drained
+  every 50 ms.
+* Scanner + TSK modules are imported lazily, so the GUI can still
+  launch and show a friendly error on a broken install.
+* We use `ctk.CTkTabview` for the results area so "Overview / Modified
+  Files / Deleted Files / Errors" are separate panes instead of one
+  long scroll.
 
 Entry point: `main()` — called by forensic_agent_gui.py.
 """
@@ -28,14 +35,14 @@ import json
 import os
 import platform
 import queue
+import subprocess
 import sys
 import threading
 import webbrowser
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-# Third-party imports are lazy so we can render a friendly error dialog
-# if the build is missing a dep rather than crashing out.
 try:
     import customtkinter as ctk
     from tkinter import filedialog, messagebox
@@ -61,31 +68,48 @@ except ImportError as e:  # pragma: no cover
 # ─────────────────────────────────────────────────────────────────────────────
 
 APP_TITLE = "Forensic Agent"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.2.0"
 DEFAULT_BACKEND = os.getenv("FORENSIC_API_URL", "https://forensic-platform-sy5q.onrender.com")
 DEFAULT_API_KEY = os.getenv("FORENSIC_API_KEY", "")
 
-# Match the website palette.
-COLOR_BG = "#0b1220"
-COLOR_PANEL = "#111a2e"
-COLOR_CARD = "#172238"
-COLOR_ACCENT = "#3b82f6"      # primary blue
-COLOR_ACCENT_HOVER = "#2563eb"
-COLOR_SUCCESS = "#10b981"
-COLOR_WARN = "#f59e0b"
-COLOR_DANGER = "#ef4444"
-COLOR_MUTED = "#64748b"
-COLOR_TEXT = "#e2e8f0"
-COLOR_DIM = "#94a3b8"
+# Disk-image file extensions — when the scanner discovers any of these
+# inside the evidence folder, the agent automatically runs TSK on them.
+DISK_IMAGE_EXTS = {".dd", ".raw", ".img", ".iso", ".e01", ".vmdk"}
+
+# Default "recently modified" window in days. Files touched inside this
+# window surface on the Modified tab first.
+DEFAULT_MODIFIED_WINDOW_DAYS = 30
+
+# ── Palette ──────────────────────────────────────────────────────────
+# Refined "premium" dark palette: deep midnight with cool surfaces, a
+# softer indigo accent (Tailwind indigo-400) that pops against the
+# background without being harsh on projector screens, and clearer
+# semantic colours for warning / danger / success.
+CLR_BG          = "#0b1120"   # window background (deep midnight)
+CLR_SURFACE     = "#121a2e"   # sidebar, top-bar, primary cards
+CLR_SURFACE_2   = "#172041"   # sub-cards inside cards
+CLR_ELEVATED    = "#1d2748"   # input backgrounds, chips
+CLR_DIVIDER     = "#2a3560"   # hairlines / borders
+CLR_ACCENT      = "#818cf8"   # primary indigo accent
+CLR_ACCENT_H    = "#6366f1"   # accent hover (deeper)
+CLR_ACCENT_SOFT = "#1f2554"   # faint accent wash for badges
+CLR_SUCCESS     = "#34d399"   # emerald-400
+CLR_WARN        = "#fbbf24"   # amber-400
+CLR_DANGER      = "#f87171"   # red-400
+CLR_INFO        = "#60a5fa"   # sky/blue-400
+CLR_TEXT        = "#f1f5f9"   # slate-100
+CLR_TEXT_DIM    = "#cbd5e1"   # slate-300
+CLR_MUTED       = "#94a3b8"   # slate-400
+CLR_FAINT       = "#64748b"   # slate-500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Scanner loader — imports scanner.py, working whether we're installed as a
-# package or running from PyInstaller's temp directory.
+# Lazy module loaders
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_scanner():
-    """Return the scanner module or raise a RuntimeError with a hint."""
+    """Import scanner.py, whether we're installed as a package, run from source,
+    or extracted by PyInstaller into sys._MEIPASS."""
     last_exc = None
     for modname in ("scanner", "agent.scanner"):
         try:
@@ -96,14 +120,7 @@ def _load_scanner():
 
 
 def _load_tsk_runner():
-    """
-    Return the tsk_runner module or raise a RuntimeError with a hint.
-
-    Same fallback pattern as _load_scanner — we want this to work whether
-    the user runs `python gui.py` from the repo root, `python agent/gui.py`
-    directly, or the PyInstaller-bundled `.exe` which ships everything
-    into a flat sys._MEIPASS directory.
-    """
+    """Same fallback pattern, for agent/tsk_runner.py."""
     last_exc = None
     for modname in ("tsk_runner", "agent.tsk_runner"):
         try:
@@ -114,19 +131,34 @@ def _load_tsk_runner():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Human-formatting helpers
+# Formatting helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fmt_size(nbytes: int) -> str:
-    """1234567 -> '1.2 MB'."""
+def _fmt_size(nbytes: Optional[int]) -> str:
+    """1234567 -> '1.2 MB'. Handles None / 0 / negative gracefully."""
+    if not nbytes or nbytes < 0:
+        return "0 B"
+    n = float(nbytes)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if nbytes < 1024:
-            return f"{nbytes:.1f} {unit}" if unit != "B" else f"{int(nbytes)} {unit}"
-        nbytes /= 1024
-    return f"{nbytes:.1f} PB"
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
 
 
-def _short_path(path: str, limit: int = 60) -> str:
+def _fmt_ts(iso: Optional[str]) -> str:
+    """ISO-UTC -> 'YYYY-MM-DD HH:MM' in the user's local timezone."""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.strptime(iso.rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+        dt = dt.replace(tzinfo=timezone.utc).astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return iso
+
+
+def _short_path(path: str, limit: int = 72) -> str:
     """Truncate a path in the middle so the filename stays visible."""
     if len(path) <= limit:
         return path
@@ -135,38 +167,290 @@ def _short_path(path: str, limit: int = 60) -> str:
     return f"{head}…{tail}"
 
 
+def _open_in_file_manager(target: str) -> None:
+    """Open a folder or file in the platform's native file manager."""
+    try:
+        if platform.system() == "Windows":
+            os.startfile(target)  # type: ignore[attr-defined]
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", target])
+        else:
+            subprocess.Popen(["xdg-open", target])
+    except Exception as e:
+        messagebox.showerror(APP_TITLE, f"Could not open:\n{target}\n\n{e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System Trash / Recycle Bin scanning
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# In addition to recovering files from disk images via Sleuth Kit, we look at
+# the OS-level trash so investigators can see (and recover) files the user
+# deleted through normal "Move to Trash" workflows. This is non-destructive —
+# we only enumerate, we never delete or empty the trash.
+#
+#   • Windows: C:\$Recycle.Bin\<SID>\$Rxxxxxx.ext   (carved bytes)
+#              C:\$Recycle.Bin\<SID>\$Ixxxxxx.ext   (sidecar with original
+#                                                    path + deletion time)
+#   • macOS:   ~/.Trash/                            (just files; no metadata)
+#   • Linux:   ~/.local/share/Trash/files/           (carved bytes)
+#              ~/.local/share/Trash/info/<name>.trashinfo
+#
+# Each entry returned is a dict shaped like:
+#   {
+#       "name":           "report.docx",
+#       "path":           "C:\\$Recycle.Bin\\S-1-5-21-…\\$Rabc.docx",
+#       "original_path":  "C:\\Users\\admin\\Documents\\report.docx",  # may be None
+#       "size":           12345,
+#       "deleted_at":     "2026-04-21T17:33:21Z",
+#       "source":         "Recycle Bin (C:)",
+#       "recoverable":    True,
+#   }
+
+
+def _parse_recycle_info_file(info_path: Path) -> Optional[Dict[str, Any]]:
+    """
+    Parse a Windows ``$I…`` sidecar to extract the original path and deletion
+    time. Returns None on any parse error so the caller can fall back to the
+    file's mtime / display name.
+
+    File format (Vista–Windows 10+):
+        offset 0  (8 bytes)  version (1 = Vista–8, 2 = Win 10+)
+        offset 8  (8 bytes)  original size
+        offset 16 (8 bytes)  deletion FILETIME (100-ns since 1601-01-01 UTC)
+        offset 24 (4 bytes)  name length in chars (Win 10+ only)
+        offset 28 (variable) UTF-16-LE original path
+    For version 1 the path is fixed-width 520 bytes (260 wchars).
+    """
+    try:
+        import struct
+        data = info_path.read_bytes()
+        if len(data) < 24:
+            return None
+        version = struct.unpack("<Q", data[:8])[0]
+        ft = struct.unpack("<Q", data[16:24])[0]
+        if version >= 2 and len(data) >= 28:
+            name_len = struct.unpack("<I", data[24:28])[0]
+            raw = data[28:28 + name_len * 2]
+        else:
+            raw = data[24:24 + 520]
+        try:
+            secs = (ft - 116444736000000000) / 10_000_000
+            deleted_at = datetime.fromtimestamp(secs, tz=timezone.utc)
+            deleted_iso = deleted_at.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        except (OverflowError, OSError, ValueError):
+            deleted_iso = None
+        original_path = raw.decode("utf-16-le", errors="replace").rstrip("\x00").strip()
+        return {
+            "original_path": original_path or None,
+            "deleted_at": deleted_iso,
+        }
+    except (OSError, struct.error, ValueError):
+        return None
+
+
+def _scan_macos_trash() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    trash = Path.home() / ".Trash"
+    if not trash.is_dir():
+        return out
+    try:
+        for f in trash.iterdir():
+            try:
+                st = f.stat()
+                deleted_at = datetime.fromtimestamp(
+                    st.st_mtime, tz=timezone.utc,
+                ).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+                out.append({
+                    "name": f.name,
+                    "path": str(f),
+                    "original_path": None,
+                    "size": st.st_size if f.is_file() else 0,
+                    "deleted_at": deleted_at,
+                    "source": "macOS Trash",
+                    "recoverable": True,
+                    "is_dir": f.is_dir(),
+                })
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _scan_windows_recycle_bin() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    # Probe every fixed drive letter the user might have. We use os.path.exists
+    # because Path("X:\\$Recycle.Bin").is_dir() returns False if the drive
+    # letter is unmounted.
+    import string
+    for letter in string.ascii_uppercase:
+        drive = f"{letter}:\\"
+        recycle_root = Path(drive) / "$Recycle.Bin"
+        try:
+            if not recycle_root.is_dir():
+                continue
+        except OSError:
+            continue
+
+        try:
+            sid_dirs = [p for p in recycle_root.iterdir() if p.is_dir()]
+        except (OSError, PermissionError):
+            continue
+
+        for sid in sid_dirs:
+            try:
+                entries = list(sid.iterdir())
+            except (OSError, PermissionError):
+                continue
+
+            # Build a quick lookup of $I sidecars keyed by their suffix so we
+            # can pair each $R<id> with its $I<id> in O(1).
+            info_by_suffix: Dict[str, Path] = {}
+            for e in entries:
+                if e.name.startswith("$I") and len(e.name) > 2:
+                    info_by_suffix[e.name[2:]] = e
+
+            for e in entries:
+                if not e.name.startswith("$R") or e.name.startswith("$Recycle"):
+                    continue
+                try:
+                    st = e.stat()
+                except OSError:
+                    continue
+                size = st.st_size if e.is_file() else 0
+
+                meta: Dict[str, Any] = {}
+                sidecar = info_by_suffix.get(e.name[2:])
+                if sidecar:
+                    parsed = _parse_recycle_info_file(sidecar)
+                    if parsed:
+                        meta = parsed
+
+                deleted_at = meta.get("deleted_at") or (
+                    datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+                )
+                original = meta.get("original_path")
+                display_name = (
+                    original.split("\\")[-1] if original else e.name
+                )
+
+                out.append({
+                    "name": display_name,
+                    "path": str(e),
+                    "original_path": original,
+                    "size": size,
+                    "deleted_at": deleted_at,
+                    "source": f"Recycle Bin ({letter}:)",
+                    "recoverable": True,
+                    "is_dir": e.is_dir(),
+                })
+    return out
+
+
+def _scan_linux_trash() -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    trash_root = Path.home() / ".local" / "share" / "Trash"
+    files_dir = trash_root / "files"
+    info_dir = trash_root / "info"
+    if not files_dir.is_dir():
+        return out
+    try:
+        entries = list(files_dir.iterdir())
+    except OSError:
+        return out
+    for f in entries:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        original = None
+        deleted_at = None
+        sidecar = info_dir / (f.name + ".trashinfo")
+        if sidecar.is_file():
+            try:
+                for line in sidecar.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines():
+                    if line.startswith("Path="):
+                        original = line[5:]
+                    elif line.startswith("DeletionDate="):
+                        deleted_at = line[13:]
+            except OSError:
+                pass
+        if not deleted_at:
+            deleted_at = datetime.fromtimestamp(
+                st.st_mtime, tz=timezone.utc,
+            ).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+        out.append({
+            "name": f.name,
+            "path": str(f),
+            "original_path": original,
+            "size": st.st_size if f.is_file() else 0,
+            "deleted_at": deleted_at,
+            "source": "Linux Trash",
+            "recoverable": True,
+            "is_dir": f.is_dir(),
+        })
+    return out
+
+
+def scan_system_trash() -> List[Dict[str, Any]]:
+    """
+    Cross-platform trash enumeration. Returns at most ``MAX_TRASH_ENTRIES``
+    items so a deeply-cluttered Recycle Bin doesn't blow up the JSON.
+    """
+    sysname = platform.system()
+    try:
+        if sysname == "Darwin":
+            items = _scan_macos_trash()
+        elif sysname == "Windows":
+            items = _scan_windows_recycle_bin()
+        elif sysname == "Linux":
+            items = _scan_linux_trash()
+        else:
+            items = []
+    except Exception:
+        # Trash scanning is best-effort; never let it break the main scan.
+        items = []
+    items.sort(key=lambda x: x.get("deleted_at") or "", reverse=True)
+    return items[:MAX_TRASH_ENTRIES]
+
+
+MAX_TRASH_ENTRIES = 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main window
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ForensicAgentApp(ctk.CTk):
     """
-    The main application window.
+    Application window.
 
-    Widget tree:
-      root
-      ├─ sidebar (branding + footer links)
-      └─ main_frame
-         ├─ step_1_config  (backend URL + API key)
-         ├─ step_2_folder  (folder picker)
-         ├─ step_3_scan    (progress + current file)
-         ├─ step_4_summary (by-type cards + submit button)
-         └─ step_5_case    (case ID + Open Report)
+    Layout:
+        root
+        ├─ sidebar      — branding, status, backend config, privacy note
+        └─ main          (scrollable)
+            ├─ header   — title + one-line description
+            ├─ card_evidence  — folder picker + options
+            ├─ card_run       — big Start button + progress + live log
+            ├─ card_results   — tabbed results (Overview / Modified / Deleted / Errors)
+            └─ card_submit    — submit-to-backend + case links on completion
     """
 
-    # Event queue for background → main thread messages.
-    # Items: (event_name: str, payload: dict)
     _q: "queue.Queue[tuple[str, dict]]"
 
     def __init__(self) -> None:
         super().__init__()
 
-        self.title(f"{APP_TITLE} {APP_VERSION}")
-        self.geometry("1100x720")
-        self.minsize(980, 640)
-        self.configure(fg_color=COLOR_BG)
+        self.title(f"{APP_TITLE}  ·  v{APP_VERSION}")
+        self.geometry("1200x780")
+        self.minsize(1040, 680)
+        self.configure(fg_color=CLR_BG)
 
-        # State
+        # ── State ────────────────────────────────────────────────────────
         self._q = queue.Queue()
         self._selected_folder: Optional[Path] = None
         self._findings: Optional[Dict[str, Any]] = None
@@ -177,371 +461,522 @@ class ForensicAgentApp(ctk.CTk):
         self._rar_decision_event = threading.Event()
         self._rar_decision_value = False
 
-        # Mode: "scan" (walk a folder with scanner.py) vs
-        #       "disk" (run Sleuth Kit on a local disk image via tsk_runner.py).
-        # Picking a folder/file sets it to "scan"; picking a disk image sets
-        # it to "disk". Step 3's Start button dispatches accordingly.
-        self._mode: str = "scan"
-
-        # Opt-in flags that the user toggles before pressing Start.
-        # Tk requires these to live after the root window is constructed,
-        # otherwise BooleanVar complains about "no default root".
-        # Browser history is OFF by default for privacy — investigators who
-        # need it flip the checkbox in Step 2.
+        # Tk variables — can only live after the root window is created.
         self._include_browsers = ctk.BooleanVar(value=False)
+        self._recover_deleted = ctk.BooleanVar(value=True)
+        self._upload_evidence = ctk.BooleanVar(value=False)
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        # ── Grid layout: sidebar (fixed), main (expand) ────────────────────
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         self._build_sidebar()
         self._build_main()
+        self._build_statusbar()
 
-        # Poll the event queue every 50ms.
+        # Drain the cross-thread event queue on the main thread.
         self.after(50, self._drain_queue)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # UI construction
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────
+    # Sidebar
+    # ─────────────────────────────────────────────────────────────────
 
     def _build_sidebar(self) -> None:
-        side = ctk.CTkFrame(
-            self, width=260, corner_radius=0, fg_color=COLOR_PANEL,
-        )
-        side.grid(row=0, column=0, sticky="nsew")
+        side = ctk.CTkFrame(self, width=280, corner_radius=0, fg_color=CLR_SURFACE)
+        side.grid(row=0, column=0, sticky="nsew", rowspan=2)
         side.grid_propagate(False)
-        side.grid_rowconfigure(5, weight=1)
+        side.grid_rowconfigure(99, weight=1)  # push footer to bottom
 
-        # Brand
+        # Brand block — diamond logo + product name + tagline
+        brand = ctk.CTkFrame(side, fg_color="transparent")
+        brand.grid(row=0, column=0, padx=24, pady=(28, 0), sticky="ew")
+        logo = ctk.CTkLabel(
+            brand, text="◆", width=36, height=36,
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=CLR_ACCENT, fg_color=CLR_ACCENT_SOFT,
+            corner_radius=10,
+        )
+        logo.pack(side="left", padx=(0, 12))
+        name_box = ctk.CTkFrame(brand, fg_color="transparent")
+        name_box.pack(side="left")
         ctk.CTkLabel(
-            side, text="⛨  Forensic", font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=COLOR_TEXT,
-        ).grid(row=0, column=0, padx=24, pady=(28, 0), sticky="w")
+            name_box, text="Forensic Agent",
+            font=ctk.CTkFont(size=17, weight="bold"), text_color=CLR_TEXT,
+        ).pack(anchor="w")
         ctk.CTkLabel(
-            side, text="Agent", font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=COLOR_ACCENT,
-        ).grid(row=1, column=0, padx=24, pady=(0, 24), sticky="w")
+            name_box, text="Local evidence triage",
+            font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+        ).pack(anchor="w")
 
         # Status chip
         self._chip = ctk.CTkLabel(
-            side, text="● Ready",
+            side, text="●  Ready",
             font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=COLOR_SUCCESS, fg_color=COLOR_CARD,
-            corner_radius=999, padx=12, pady=6,
+            text_color=CLR_SUCCESS, fg_color=CLR_ELEVATED,
+            corner_radius=999, padx=14, pady=6,
         )
-        self._chip.grid(row=2, column=0, padx=24, pady=(0, 8), sticky="w")
+        self._chip.grid(row=2, column=0, padx=24, pady=(22, 18), sticky="w")
 
-        # What it does
-        desc = (
-            "Scans a folder locally,\n"
-            "computes MD5 & SHA-256,\n"
-            "extracts metadata, then\n"
-            "sends findings to your\n"
-            "forensic backend."
+        # Divider
+        self._hairline(side, row=3)
+
+        # Backend config
+        self._build_sidebar_backend(side, row=4)
+
+        # Divider
+        self._hairline(side, row=5)
+
+        # Privacy note
+        privacy = ctk.CTkFrame(
+            side, fg_color=CLR_ELEVATED, corner_radius=12,
+            border_color=CLR_DIVIDER, border_width=1,
         )
+        privacy.grid(row=6, column=0, padx=24, pady=(20, 0), sticky="ew")
+        prh = ctk.CTkFrame(privacy, fg_color="transparent")
+        prh.pack(fill="x", padx=14, pady=(12, 2))
         ctk.CTkLabel(
-            side, text=desc, justify="left", text_color=COLOR_DIM,
-            font=ctk.CTkFont(size=12),
-        ).grid(row=3, column=0, padx=24, pady=(16, 8), sticky="w")
-
-        # Privacy callout
-        privacy = ctk.CTkFrame(side, fg_color=COLOR_CARD, corner_radius=10)
-        privacy.grid(row=4, column=0, padx=24, pady=(8, 0), sticky="ew")
+            prh, text="🔒",
+            font=ctk.CTkFont(size=12), text_color=CLR_SUCCESS,
+        ).pack(side="left", padx=(0, 6))
         ctk.CTkLabel(
-            privacy, text="Privacy",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=COLOR_SUCCESS,
-        ).pack(anchor="w", padx=12, pady=(10, 2))
+            prh, text="PRIVACY",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_SUCCESS,
+        ).pack(side="left")
         ctk.CTkLabel(
             privacy,
-            text="Evidence bytes stay on\nyour machine. Only the\nJSON findings report is\nsent to the backend.",
-            justify="left", text_color=COLOR_DIM,
-            font=ctk.CTkFont(size=11),
-        ).pack(anchor="w", padx=12, pady=(0, 10))
+            text="Evidence stays on this machine. "
+                 "Only the JSON findings — never the raw files — "
+                 "are sent to the backend on Submit.",
+            justify="left", text_color=CLR_TEXT_DIM,
+            font=ctk.CTkFont(size=11), wraplength=210,
+        ).pack(anchor="w", padx=14, pady=(2, 14))
 
-        # Footer
+        # Footer pinned to bottom via row 99 weight=1
         foot = ctk.CTkFrame(side, fg_color="transparent")
-        foot.grid(row=6, column=0, padx=24, pady=(0, 20), sticky="sew")
+        foot.grid(row=100, column=0, padx=24, pady=(0, 20), sticky="sew")
         ctk.CTkLabel(
             foot, text=f"v{APP_VERSION}",
-            font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
+            font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
         ).pack(anchor="w")
         ctk.CTkLabel(
             foot, text=f"{platform.system()} {platform.release()}",
-            font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
+            font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
         ).pack(anchor="w")
 
-    def _build_main(self) -> None:
-        main = ctk.CTkScrollableFrame(
-            self, fg_color=COLOR_BG,
-            scrollbar_button_color=COLOR_PANEL,
-            scrollbar_button_hover_color=COLOR_CARD,
-        )
-        main.grid(row=0, column=1, sticky="nsew", padx=24, pady=24)
-        main.grid_columnconfigure(0, weight=1)
-
-        # Header
-        hdr = ctk.CTkFrame(main, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", pady=(0, 16))
-        hdr.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            hdr, text="Run a Forensic Scan",
-            font=ctk.CTkFont(size=28, weight="bold"),
-            text_color=COLOR_TEXT,
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            hdr, text="Point the agent at a folder. It hashes every file, pulls EXIF "
-            "and document text, flags disk images, and ships only the findings "
-            "to your backend.",
-            font=ctk.CTkFont(size=13), justify="left",
-            text_color=COLOR_DIM, wraplength=720,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-
-        # Step 1 — Backend config
-        self._build_step_config(main, row=1)
-
-        # Step 2 — Folder picker
-        self._build_step_folder(main, row=2)
-
-        # Step 3 — Scan progress
-        self._build_step_scan(main, row=3)
-
-        # Step 4 — Summary + submit
-        self._build_step_summary(main, row=4)
-
-        # Step 5 — Case result
-        self._build_step_case(main, row=5)
-
-    # Step 1 -----------------------------------------------------------------
-    def _build_step_config(self, parent, *, row: int) -> None:
-        card = self._card(parent, row=row)
-        self._step_header(card, "1", "Connect to your backend")
-
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=24, pady=(0, 20))
-        body.grid_columnconfigure(1, weight=1)
+    def _build_sidebar_backend(self, parent, *, row: int) -> None:
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.grid(row=row, column=0, padx=24, pady=(18, 6), sticky="ew")
 
         ctk.CTkLabel(
-            body, text="Backend URL", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=COLOR_DIM,
-        ).grid(row=0, column=0, padx=(0, 16), pady=8, sticky="w")
+            wrap, text="BACKEND",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_MUTED,
+        ).pack(anchor="w", pady=(0, 8))
+
+        ctk.CTkLabel(
+            wrap, text="API URL",
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w")
         self._entry_url = ctk.CTkEntry(
-            body, height=38, fg_color=COLOR_BG, border_color=COLOR_CARD,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=13),
+            wrap, height=34, fg_color=CLR_ELEVATED,
+            border_color=CLR_DIVIDER, border_width=1,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11),
         )
-        self._entry_url.grid(row=0, column=1, sticky="ew", pady=8)
+        self._entry_url.pack(fill="x", pady=(2, 10))
         self._entry_url.insert(0, DEFAULT_BACKEND)
 
         ctk.CTkLabel(
-            body, text="API Key", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=COLOR_DIM,
-        ).grid(row=1, column=0, padx=(0, 16), pady=8, sticky="w")
+            wrap, text="API Key",
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w")
         self._entry_key = ctk.CTkEntry(
-            body, height=38, fg_color=COLOR_BG, border_color=COLOR_CARD,
-            text_color=COLOR_TEXT, show="•", font=ctk.CTkFont(size=13),
+            wrap, height=34, fg_color=CLR_ELEVATED,
+            border_color=CLR_DIVIDER, border_width=1,
+            text_color=CLR_TEXT, show="•", font=ctk.CTkFont(size=11),
         )
-        self._entry_key.grid(row=1, column=1, sticky="ew", pady=8)
+        self._entry_key.pack(fill="x", pady=(2, 10))
         if DEFAULT_API_KEY:
             self._entry_key.insert(0, DEFAULT_API_KEY)
 
-        # Test button
-        btn_row = ctk.CTkFrame(body, fg_color="transparent")
-        btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        btn_row = ctk.CTkFrame(wrap, fg_color="transparent")
+        btn_row.pack(fill="x")
         self._btn_test = ctk.CTkButton(
-            btn_row, text="Test Connection", height=34, width=140,
-            fg_color=COLOR_CARD, hover_color=COLOR_PANEL,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=12, weight="bold"),
+            btn_row, text="Test Connection", height=30,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11, weight="bold"),
             command=self._on_test_connection,
         )
-        self._btn_test.pack(side="left")
+        self._btn_test.pack(side="left", fill="x", expand=True)
         self._lbl_test = ctk.CTkLabel(
-            btn_row, text="", font=ctk.CTkFont(size=12),
-            text_color=COLOR_DIM,
+            wrap, text="", font=ctk.CTkFont(size=10),
+            text_color=CLR_TEXT_DIM, anchor="w", justify="left", wraplength=220,
         )
-        self._lbl_test.pack(side="left", padx=(12, 0))
+        self._lbl_test.pack(anchor="w", pady=(6, 0), fill="x")
 
-    # Step 2 -----------------------------------------------------------------
-    def _build_step_folder(self, parent, *, row: int) -> None:
-        card = self._card(parent, row=row)
-        self._step_header(card, "2", "Choose what to investigate")
+    # ─────────────────────────────────────────────────────────────────
+    # Main content
+    # ─────────────────────────────────────────────────────────────────
 
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=24, pady=(0, 20))
-        body.grid_columnconfigure(0, weight=1)
-
-        self._lbl_folder = ctk.CTkLabel(
-            body, text="No folder or disk image selected",
-            font=ctk.CTkFont(size=13), text_color=COLOR_DIM,
-            anchor="w", justify="left",
+    def _build_main(self) -> None:
+        main = ctk.CTkScrollableFrame(
+            self, fg_color=CLR_BG,
+            scrollbar_button_color=CLR_SURFACE,
+            scrollbar_button_hover_color=CLR_ELEVATED,
         )
-        self._lbl_folder.grid(row=0, column=0, sticky="ew", padx=(0, 16))
+        main.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        main.grid_columnconfigure(0, weight=1)
 
-        btn_frame = ctk.CTkFrame(body, fg_color="transparent")
-        btn_frame.grid(row=0, column=1, sticky="e")
+        inner = ctk.CTkFrame(main, fg_color="transparent")
+        inner.grid(row=0, column=0, sticky="nsew", padx=36, pady=(32, 24))
+        inner.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(
-            btn_frame, text="Choose Folder…", height=38, width=140,
-            fg_color=COLOR_CARD, hover_color=COLOR_PANEL,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._on_pick_folder,
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            btn_frame, text="Choose File…", height=38, width=120,
-            fg_color=COLOR_CARD, hover_color=COLOR_PANEL,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._on_pick_file,
-        ).pack(side="left", padx=(0, 8))
-        # Disk-image mode — routes to tsk_runner (mmls → fsstat → fls →
-        # tsk_recover) instead of the logical scanner. The deleted files
-        # end up on the investigator's Desktop under TheDeletedFiles/.
-        ctk.CTkButton(
-            btn_frame, text="💿  Analyze Disk Image…", height=38, width=180,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            text_color="white", font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._on_pick_disk_image,
-        ).pack(side="left")
+        self._build_header(inner, row=0)
+        self._build_card_evidence(inner, row=1)
+        self._build_card_run(inner, row=2)
+        self._build_card_results(inner, row=3)
+        self._build_card_submit(inner, row=4)
 
-        # Options row — below the picker, spans the full width.
-        opts = ctk.CTkFrame(body, fg_color="transparent")
-        opts.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        ctk.CTkCheckBox(
-            opts,
-            text="Include browser history (Chrome / Firefox / Edge / Safari)",
-            variable=self._include_browsers,
-            font=ctk.CTkFont(size=12),
-            text_color=COLOR_TEXT,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-        ).pack(side="left")
+    def _build_header(self, parent, *, row: int) -> None:
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        hdr.grid(row=row, column=0, sticky="ew", pady=(0, 26))
+
+        # Eyebrow tag
+        eyebrow = ctk.CTkLabel(
+            hdr, text="NEW INVESTIGATION",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_ACCENT,
+        )
+        eyebrow.pack(anchor="w", pady=(0, 6))
+
         ctk.CTkLabel(
-            opts,
-            text="— off by default for privacy",
-            font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
-        ).pack(side="left", padx=(8, 0))
+            hdr, text="Folder Forensics Workspace",
+            font=ctk.CTkFont(size=32, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            hdr,
+            text=("Select a folder on this machine. The agent walks every file "
+                  "inside it — hashing, extracting metadata, surfacing recently "
+                  "modified items, locating disk images for Sleuth Kit, and "
+                  "enumerating the system trash for deleted files you can "
+                  "recover. Nothing leaves the machine until you press Submit."),
+            font=ctk.CTkFont(size=13), justify="left",
+            text_color=CLR_TEXT_DIM, wraplength=860,
+        ).pack(anchor="w", pady=(8, 0))
 
-    # Step 3 -----------------------------------------------------------------
-    def _build_step_scan(self, parent, *, row: int) -> None:
+    # ── Card: Evidence picker + options ──────────────────────────────────
+    def _build_card_evidence(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._step_header(card, "3", "Run the analysis")
+        self._card_header(
+            card, step="1", title="Evidence Source",
+            subtitle="Select a folder. Every file inside it — and any nested "
+                     "subfolders — will be analysed. Single-file selection is "
+                     "intentionally not supported; folder context is what makes "
+                     "the timeline and deleted-file analysis meaningful.",
+        )
 
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=24, pady=(0, 20))
+        body.pack(fill="x", padx=28, pady=(0, 24))
 
-        # Start button row
-        btn_row = ctk.CTkFrame(body, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(0, 12))
-
-        # Button label is updated live by _on_pick_folder / _on_pick_file /
-        # _on_pick_disk_image so the user always sees the action that will
-        # actually run when they click it.
-        self._btn_scan = ctk.CTkButton(
-            btn_row, text="▶  Start", height=44, width=220,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            text_color="white", font=ctk.CTkFont(size=14, weight="bold"),
-            command=self._on_start, state="disabled",
+        # Folder picker row — large, friendly drop-zone style.
+        pick_row = ctk.CTkFrame(
+            body, fg_color=CLR_SURFACE_2, corner_radius=12,
+            border_color=CLR_DIVIDER, border_width=1,
         )
-        self._btn_scan.pack(side="left")
+        pick_row.pack(fill="x")
 
-        self._lbl_scan_status = ctk.CTkLabel(
-            btn_row, text="Pick a folder or disk image above first.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
+        # Left side: icon + path block
+        left = ctk.CTkFrame(pick_row, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True, padx=20, pady=18)
+        ctk.CTkLabel(
+            left, text="📁", font=ctk.CTkFont(size=28),
+            text_color=CLR_ACCENT,
+        ).pack(side="left", padx=(0, 14))
+        path_col = ctk.CTkFrame(left, fg_color="transparent")
+        path_col.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            path_col, text="EVIDENCE FOLDER",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_MUTED, anchor="w",
+        ).pack(anchor="w")
+        self._lbl_folder = ctk.CTkLabel(
+            path_col, text="No folder selected yet.",
+            font=ctk.CTkFont(size=13), text_color=CLR_TEXT_DIM,
+            anchor="w", justify="left", wraplength=560,
         )
-        self._lbl_scan_status.pack(side="left", padx=(16, 0))
+        self._lbl_folder.pack(anchor="w", pady=(2, 0), fill="x")
+
+        # Right side: action button
+        ctk.CTkButton(
+            pick_row, text="Browse Folder…", height=44, width=180,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            text_color="white", font=ctk.CTkFont(size=13, weight="bold"),
+            corner_radius=10,
+            command=self._on_pick_folder,
+        ).pack(side="right", padx=16, pady=14)
+
+        # Capability strip — what the agent will actually do, in plain English.
+        cap = ctk.CTkFrame(body, fg_color="transparent")
+        cap.pack(fill="x", pady=(14, 0))
+        for icon, text in (
+            ("🧮", "Hash & inventory every file (MD5 / SHA-256)"),
+            ("🕒", f"Surface files modified in the last "
+                   f"{DEFAULT_MODIFIED_WINDOW_DAYS} days with timestamps"),
+            ("💿", "Auto-detect disk images (.dd / .e01 / .raw / …) → Sleuth Kit"),
+            ("🗑", "Enumerate the system Trash / Recycle Bin for deleted files"),
+        ):
+            row_ = ctk.CTkFrame(cap, fg_color="transparent")
+            row_.pack(fill="x", pady=2)
+            ctk.CTkLabel(
+                row_, text=icon, font=ctk.CTkFont(size=13),
+                text_color=CLR_ACCENT, width=24,
+            ).pack(side="left")
+            ctk.CTkLabel(
+                row_, text=text, font=ctk.CTkFont(size=12),
+                text_color=CLR_TEXT_DIM, anchor="w",
+            ).pack(side="left", padx=(8, 0))
+
+        # Options grid — checkboxes with explanations
+        opts = ctk.CTkFrame(body, fg_color="transparent")
+        opts.pack(fill="x", pady=(20, 0))
+        opts.grid_columnconfigure(0, weight=1)
+        opts.grid_columnconfigure(1, weight=1)
+
+        self._option_row(
+            opts, row=0, column=0,
+            title="Recover deleted files",
+            detail="Run Sleuth Kit on any disk image inside the folder AND "
+                   "enumerate the OS Trash / Recycle Bin. Carved bytes are "
+                   "written to Desktop / TheDeletedFiles.",
+            variable=self._recover_deleted,
+        )
+        self._option_row(
+            opts, row=0, column=1,
+            title="Include browser history",
+            detail="Parse Chrome, Edge, Firefox, Opera, Safari, Brave, Vivaldi "
+                   "and Arc history databases. Off by default for privacy.",
+            variable=self._include_browsers,
+        )
+
+    def _option_row(self, parent, *, row: int, column: int,
+                    title: str, detail: str, variable) -> None:
+        # Unified card-styled checkbox with a short description beneath it.
+        card = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE_2, corner_radius=10,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        card.grid(row=row, column=column, sticky="ew",
+                  padx=(0, 8) if column == 0 else (8, 0), pady=0)
+        ctk.CTkCheckBox(
+            card, text=title, variable=variable,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=CLR_TEXT,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            checkbox_width=20, checkbox_height=20,
+        ).pack(anchor="w", padx=18, pady=(16, 6))
+        ctk.CTkLabel(
+            card, text=detail,
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=380,
+        ).pack(anchor="w", padx=18, pady=(0, 16))
+
+    # ── Card: Run + progress ─────────────────────────────────────────────
+    def _build_card_run(self, parent, *, row: int) -> None:
+        card = self._card(parent, row=row)
+        self._card_header(
+            card, step="2", title="Analyse",
+            subtitle="Hashes every file, surfaces recently modified items, "
+                     "runs Sleuth Kit on any disk image inside the folder, "
+                     "and enumerates the system Trash for deleted files.",
+        )
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=28, pady=(0, 24))
+
+        # Start row
+        start_row = ctk.CTkFrame(body, fg_color="transparent")
+        start_row.pack(fill="x")
+
+        self._btn_start = ctk.CTkButton(
+            start_row, text="▶   Start Analysis", height=52, width=240,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            text_color="white", font=ctk.CTkFont(size=15, weight="bold"),
+            corner_radius=12,
+            command=self._on_start_analysis, state="disabled",
+        )
+        self._btn_start.pack(side="left")
+
+        self._lbl_run_status = ctk.CTkLabel(
+            start_row, text="Pick a folder above to begin.",
+            font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+            justify="left", wraplength=600, anchor="w",
+        )
+        self._lbl_run_status.pack(side="left", padx=(20, 0), fill="x", expand=True)
 
         # Progress bar
         self._progress = ctk.CTkProgressBar(
-            body, height=8, fg_color=COLOR_CARD,
-            progress_color=COLOR_ACCENT,
+            body, height=8, fg_color=CLR_ELEVATED,
+            progress_color=CLR_ACCENT, corner_radius=999,
         )
-        self._progress.pack(fill="x", pady=(4, 8))
+        self._progress.pack(fill="x", pady=(20, 8))
         self._progress.set(0)
 
-        # Current file label
+        # Current activity line
         self._lbl_current = ctk.CTkLabel(
-            body, text="", font=ctk.CTkFont(size=11, family="monospace"),
-            text_color=COLOR_MUTED, anchor="w", justify="left",
+            body, text=" ", font=ctk.CTkFont(size=11, family="Consolas"),
+            text_color=CLR_TEXT_DIM, anchor="w", justify="left",
         )
         self._lbl_current.pack(fill="x")
 
-        # Counters row
+        # Counter strip
         counters = ctk.CTkFrame(body, fg_color="transparent")
-        counters.pack(fill="x", pady=(8, 0))
-        self._lbl_counter_files = self._counter(counters, "Files", "0")
-        self._lbl_counter_files.pack(side="left", padx=(0, 24))
-        self._lbl_counter_errors = self._counter(counters, "Errors", "0")
-        self._lbl_counter_errors.pack(side="left", padx=(0, 24))
-        self._lbl_counter_images = self._counter(counters, "Disk images", "0")
-        self._lbl_counter_images.pack(side="left")
+        counters.pack(fill="x", pady=(16, 0))
+        self._cnt_files    = self._counter(counters, "Files",    accent=CLR_TEXT)
+        self._cnt_modified = self._counter(counters, "Modified", accent=CLR_WARN)
+        self._cnt_deleted  = self._counter(counters, "Deleted",  accent=CLR_DANGER)
+        self._cnt_trash    = self._counter(counters, "In Trash", accent=CLR_INFO)
+        self._cnt_recovered = self._counter(counters, "Recovered", accent=CLR_SUCCESS)
+        self._cnt_errors   = self._counter(counters, "Errors",   accent=CLR_FAINT)
+        for i, w in enumerate((
+            self._cnt_files, self._cnt_modified, self._cnt_deleted,
+            self._cnt_trash, self._cnt_recovered, self._cnt_errors,
+        )):
+            w.pack(side="left", padx=(0, 22) if i < 5 else (0, 0))
 
-    # Step 4 -----------------------------------------------------------------
-    def _build_step_summary(self, parent, *, row: int) -> None:
+    # ── Card: Results (tabbed) ───────────────────────────────────────────
+    def _build_card_results(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._step_header(card, "4", "Review & submit")
+        self._card_header(card, step="3", title="Results",
+                          subtitle="Summary, modified files (with dates), and recovered "
+                                   "deleted files — each on its own tab.")
 
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=24, pady=(0, 20))
-        self._summary_body = body
+        body.pack(fill="both", expand=True, padx=28, pady=(0, 22))
 
-        self._lbl_summary_empty = ctk.CTkLabel(
-            body, text="Scan results will appear here.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
+        # Empty-state panel, replaced with CTkTabview once analysis runs.
+        self._results_body = body
+        self._lbl_results_empty = ctk.CTkLabel(
+            body, text="Results will appear here once the analysis completes.",
+            font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
         )
-        self._lbl_summary_empty.pack(anchor="w", pady=4)
+        self._lbl_results_empty.pack(anchor="w", pady=16)
 
-    # Step 5 -----------------------------------------------------------------
-    def _build_step_case(self, parent, *, row: int) -> None:
+    # ── Card: Submit + case result ───────────────────────────────────────
+    def _build_card_submit(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._step_header(card, "5", "Your case")
+        self._card_header(
+            card, step="4", title="Publish",
+            subtitle="Send the structured findings JSON to the backend and "
+                     "receive a Case ID with a shareable report URL plus a "
+                     "downloadable PDF.",
+        )
 
         body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="x", padx=24, pady=(0, 20))
-        self._case_body = body
+        body.pack(fill="x", padx=28, pady=(0, 24))
+        self._submit_body = body
 
-        self._lbl_case_empty = ctk.CTkLabel(
-            body, text="After submission, your Case ID appears here with a link "
-            "to open the report in your browser.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
-            wraplength=700, justify="left",
+        btn_row = ctk.CTkFrame(body, fg_color="transparent")
+        btn_row.pack(fill="x")
+        self._btn_submit = ctk.CTkButton(
+            btn_row, text="Submit Findings", height=46, width=210,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            text_color="white", font=ctk.CTkFont(size=14, weight="bold"),
+            corner_radius=12, command=self._on_submit, state="disabled",
         )
-        self._lbl_case_empty.pack(anchor="w", pady=4)
+        self._btn_submit.pack(side="left")
+        self._btn_save = ctk.CTkButton(
+            btn_row, text="Save JSON…", height=46, width=160,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=13, weight="bold"),
+            corner_radius=12, command=self._on_save_json, state="disabled",
+        )
+        self._btn_save.pack(side="left", padx=(10, 0))
 
-    # ─────────────────────────────────────────────────────────────────────
-    # UI helpers
-    # ─────────────────────────────────────────────────────────────────────
+        self._lbl_submit_status = ctk.CTkLabel(
+            body, text="Run the analysis to unlock submission.",
+            font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+            anchor="w", justify="left", wraplength=700,
+        )
+        self._lbl_submit_status.pack(anchor="w", pady=(14, 0), fill="x")
+
+        self._case_panel: Optional[ctk.CTkFrame] = None
+
+    # ── Status bar at bottom ─────────────────────────────────────────────
+    def _build_statusbar(self) -> None:
+        bar = ctk.CTkFrame(self, fg_color=CLR_SURFACE, corner_radius=0, height=30)
+        bar.grid(row=1, column=1, sticky="sew")
+        bar.grid_propagate(False)
+        # Top hairline so the status bar reads as a separate region.
+        line = ctk.CTkFrame(bar, fg_color=CLR_DIVIDER, height=1)
+        line.pack(fill="x", side="top")
+        self._sb_label = ctk.CTkLabel(
+            bar, text=f"Ready  ·  {platform.system()} {platform.release()}  "
+                      f"·  Python {platform.python_version()}",
+            font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+        )
+        self._sb_label.pack(side="left", padx=22, pady=4)
+        ctk.CTkLabel(
+            bar, text=f"v{APP_VERSION}",
+            font=ctk.CTkFont(size=10), text_color=CLR_FAINT,
+        ).pack(side="right", padx=22, pady=4)
+
+    # ─────────────────────────────────────────────────────────────────
+    # Reusable UI helpers
+    # ─────────────────────────────────────────────────────────────────
 
     def _card(self, parent, *, row: int) -> ctk.CTkFrame:
-        card = ctk.CTkFrame(parent, fg_color=COLOR_PANEL, corner_radius=12)
-        card.grid(row=row, column=0, sticky="ew", pady=(0, 16))
+        card = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE, corner_radius=16,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        card.grid(row=row, column=0, sticky="ew", pady=(0, 20))
         return card
 
-    def _step_header(self, parent, num: str, title: str) -> None:
+    def _card_header(self, parent, *, step: str, title: str, subtitle: str) -> None:
         hdr = ctk.CTkFrame(parent, fg_color="transparent")
-        hdr.pack(fill="x", padx=24, pady=(20, 12))
+        hdr.pack(fill="x", padx=28, pady=(24, 18))
+
+        lrow = ctk.CTkFrame(hdr, fg_color="transparent")
+        lrow.pack(fill="x")
         badge = ctk.CTkLabel(
-            hdr, text=num, width=28, height=28,
-            fg_color=COLOR_ACCENT, text_color="white",
+            lrow, text=step, width=30, height=30,
+            fg_color=CLR_ACCENT_SOFT, text_color=CLR_ACCENT,
             font=ctk.CTkFont(size=13, weight="bold"),
-            corner_radius=999,
+            corner_radius=8,
         )
-        badge.pack(side="left", padx=(0, 12))
+        badge.pack(side="left", padx=(0, 14))
         ctk.CTkLabel(
-            hdr, text=title, font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=COLOR_TEXT,
+            lrow, text=title,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=CLR_TEXT,
         ).pack(side="left")
 
-    def _counter(self, parent, label: str, value: str) -> ctk.CTkFrame:
+        ctk.CTkLabel(
+            hdr, text=subtitle,
+            font=ctk.CTkFont(size=12), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=820, anchor="w",
+        ).pack(anchor="w", pady=(6, 0), padx=(44, 0))
+
+    def _hairline(self, parent, *, row: int) -> None:
+        line = ctk.CTkFrame(parent, fg_color=CLR_DIVIDER, height=1)
+        line.grid(row=row, column=0, sticky="ew", padx=24, pady=(18, 0))
+
+    def _counter(self, parent, label: str,
+                 accent: Optional[str] = None) -> ctk.CTkFrame:
         f = ctk.CTkFrame(parent, fg_color="transparent")
         v = ctk.CTkLabel(
-            f, text=value, font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=COLOR_TEXT,
+            f, text="0", font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=accent or CLR_TEXT,
         )
         v.pack(anchor="w")
         ctk.CTkLabel(
-            f, text=label, font=ctk.CTkFont(size=11),
-            text_color=COLOR_MUTED,
+            f, text=label.upper(),
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=CLR_MUTED,
         ).pack(anchor="w")
         f._value_lbl = v  # type: ignore[attr-defined]
         return f
@@ -552,16 +987,38 @@ class ForensicAgentApp(ctk.CTk):
     def _set_chip(self, text: str, color: str) -> None:
         self._chip.configure(text=text, text_color=color)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Event handlers — button clicks
-    # ─────────────────────────────────────────────────────────────────────
+    def _set_statusbar(self, text: str) -> None:
+        self._sb_label.configure(text=text)
+
+    def _stat_card(self, parent, label: str, value: str,
+                   accent: Optional[str] = None) -> None:
+        card = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE_2, corner_radius=12,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        card.pack(side="left", padx=(0, 10), ipadx=18, ipady=12)
+        ctk.CTkLabel(
+            card, text=value,
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=accent or CLR_TEXT,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            card, text=label.upper(),
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=CLR_MUTED,
+        ).pack(anchor="w")
+
+    # ─────────────────────────────────────────────────────────────────
+    # Event handlers
+    # ─────────────────────────────────────────────────────────────────
 
     def _on_test_connection(self) -> None:
         url = self._entry_url.get().strip().rstrip("/")
         if not url:
-            self._lbl_test.configure(text="Enter a backend URL first.", text_color=COLOR_DANGER)
+            self._lbl_test.configure(text="Enter a backend URL first.",
+                                     text_color=CLR_DANGER)
             return
-        self._lbl_test.configure(text="Testing…", text_color=COLOR_DIM)
+        self._lbl_test.configure(text="Testing…", text_color=CLR_TEXT_DIM)
         self._btn_test.configure(state="disabled")
 
         def worker():
@@ -575,71 +1032,22 @@ class ForensicAgentApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_pick_folder(self) -> None:
-        path = filedialog.askdirectory(title="Select a folder to investigate")
-        if path:
-            self._selected_folder = Path(path)
-            self._mode = "scan"
-            self._lbl_folder.configure(
-                text=f"📁  {path}", text_color=COLOR_TEXT,
-            )
-            self._btn_scan.configure(state="normal", text="▶  Start Scan")
-            self._lbl_scan_status.configure(
-                text="Ready to scan.", text_color=COLOR_DIM,
-            )
-
-    def _on_pick_file(self) -> None:
-        path = filedialog.askopenfilename(title="Select a file")
-        if path:
-            self._selected_folder = Path(path)
-            self._mode = "scan"
-            self._lbl_folder.configure(
-                text=f"📄  {path}", text_color=COLOR_TEXT,
-            )
-            self._btn_scan.configure(state="normal", text="▶  Start Scan")
-            self._lbl_scan_status.configure(
-                text="Ready to scan.", text_color=COLOR_DIM,
-            )
-
-    def _on_pick_disk_image(self) -> None:
-        """
-        Pick a disk-image file (.dd / .e01 / .raw / .img / .iso / .vmdk) and
-        switch into Sleuth Kit mode. The Start button now kicks off
-        `_disk_worker` which runs mmls → fsstat → fls → tsk_recover via
-        tsk_runner.LocalTSKRunner and recovers deleted files to the user's
-        Desktop\\TheDeletedFiles folder.
-        """
-        path = filedialog.askopenfilename(
-            title="Select a disk image",
-            filetypes=[
-                ("Disk images", "*.dd *.raw *.img *.iso *.vmdk *.e01 *.E01"),
-                ("Raw disk image (.dd)", "*.dd"),
-                ("Raw disk image (.raw)", "*.raw"),
-                ("EnCase image (.e01)", "*.e01 *.E01"),
-                ("ISO image", "*.iso"),
-                ("All files", "*.*"),
-            ],
+        path = filedialog.askdirectory(
+            title="Select an evidence folder to investigate",
+            mustexist=True,
         )
         if not path:
             return
         self._selected_folder = Path(path)
-        self._mode = "disk"
-        self._lbl_folder.configure(
-            text=f"💿  {path}", text_color=COLOR_TEXT,
-        )
-        self._btn_scan.configure(state="normal", text="💿  Analyze Disk Image")
-        self._lbl_scan_status.configure(
-            text="Ready to run Sleuth Kit on this image.",
-            text_color=COLOR_DIM,
+        # The picker card already shows a folder icon, so just render the path.
+        self._lbl_folder.configure(text=path, text_color=CLR_TEXT)
+        self._btn_start.configure(state="normal")
+        self._lbl_run_status.configure(
+            text="Ready. Press Start Analysis to begin.",
+            text_color=CLR_TEXT_DIM,
         )
 
-    def _on_start(self) -> None:
-        """Dispatch Start to the right worker based on current mode."""
-        if self._mode == "disk":
-            self._on_start_disk_analysis()
-        else:
-            self._on_start_scan()
-
-    def _on_start_scan(self) -> None:
+    def _on_start_analysis(self) -> None:
         if not self._selected_folder:
             messagebox.showwarning(APP_TITLE, "Pick a folder first.")
             return
@@ -648,69 +1056,28 @@ class ForensicAgentApp(ctk.CTk):
 
         # Reset UI
         self._progress.set(0)
-        self._set_counter(self._lbl_counter_files, "0")
-        self._set_counter(self._lbl_counter_errors, "0")
-        self._set_counter(self._lbl_counter_images, "0")
-        self._clear_summary()
-        self._clear_case()
+        for c in (self._cnt_files, self._cnt_modified, self._cnt_deleted,
+                  self._cnt_trash, self._cnt_recovered, self._cnt_errors):
+            self._set_counter(c, "0")
+        self._clear_results()
+        self._reset_submit()
         self._findings = None
         self._case_id = None
-        self._btn_scan.configure(state="disabled", text="Scanning…")
-        self._lbl_scan_status.configure(
-            text="Walking the folder…", text_color=COLOR_ACCENT,
+        self._btn_start.configure(state="disabled", text="Analyzing…")
+        self._lbl_run_status.configure(
+            text="Walking folder…", text_color=CLR_ACCENT,
         )
-        self._lbl_current.configure(text="")
-        self._set_chip("● Scanning", COLOR_ACCENT)
+        self._lbl_current.configure(text=" ")
+        self._set_chip("●  Analyzing", CLR_ACCENT)
+        self._set_statusbar("Analysis in progress…")
 
-        # Kick off scanner in a thread, passing the browser-history opt-in
-        # so the scanner knows whether to parse browser DBs or skip them.
-        include_browsers = bool(self._include_browsers.get())
         self._scan_thread = threading.Thread(
             target=self._scan_worker,
-            args=(self._selected_folder, include_browsers),
-            daemon=True,
-        )
-        self._scan_thread.start()
-
-    def _on_start_disk_analysis(self) -> None:
-        """
-        Kick off a local Sleuth Kit analysis of the selected disk image.
-
-        We do all of the heavy lifting locally so raw evidence never leaves
-        the investigator's machine. Only the JSON findings (and a list of
-        recovered deleted filenames, NOT their contents) get POSTed to the
-        backend afterwards if the user chooses to submit.
-        """
-        if not self._selected_folder:
-            messagebox.showwarning(APP_TITLE, "Pick a disk image first.")
-            return
-        if self._scan_thread and self._scan_thread.is_alive():
-            return
-        if not self._selected_folder.exists():
-            messagebox.showerror(
-                APP_TITLE, f"Disk image no longer exists:\n{self._selected_folder}",
-            )
-            return
-
-        # Reset UI
-        self._progress.set(0)
-        self._set_counter(self._lbl_counter_files, "0")
-        self._set_counter(self._lbl_counter_errors, "0")
-        self._set_counter(self._lbl_counter_images, "1")
-        self._clear_summary()
-        self._clear_case()
-        self._findings = None
-        self._case_id = None
-        self._btn_scan.configure(state="disabled", text="Analyzing…")
-        self._lbl_scan_status.configure(
-            text="Running Sleuth Kit…", text_color=COLOR_ACCENT,
-        )
-        self._lbl_current.configure(text="")
-        self._set_chip("● Analyzing", COLOR_ACCENT)
-
-        self._scan_thread = threading.Thread(
-            target=self._disk_worker,
-            args=(self._selected_folder,),
+            args=(
+                self._selected_folder,
+                bool(self._include_browsers.get()),
+                bool(self._recover_deleted.get()),
+            ),
             daemon=True,
         )
         self._scan_thread.start()
@@ -732,778 +1099,17 @@ class ForensicAgentApp(ctk.CTk):
 
         self._btn_submit.configure(state="disabled", text="Submitting…")
         self._lbl_submit_status.configure(
-            text="Uploading findings JSON to backend…", text_color=COLOR_ACCENT,
+            text="Uploading findings JSON to backend…",
+            text_color=CLR_ACCENT,
         )
-        self._set_chip("● Submitting", COLOR_ACCENT)
-
-        # Only pass through the disk-image list if the user opted in. The
-        # checkbox lives on the summary panel and is built in _render_summary.
-        upload_images: bool = False
-        try:
-            upload_images = bool(getattr(self, "_opt_upload_images").get())
-        except Exception:
-            upload_images = False
-        disk_images = list(self._findings.get("images_to_upload") or []) \
-            if upload_images else []
+        self._set_chip("●  Submitting", CLR_ACCENT)
 
         self._submit_thread = threading.Thread(
             target=self._submit_worker,
-            args=(url, key, self._findings, disk_images),
+            args=(url, key, self._findings),
             daemon=True,
         )
         self._submit_thread.start()
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Background workers — must not touch Tk directly, use the queue.
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _scan_worker(self, root: Path, include_browsers: bool = False) -> None:
-        try:
-            scanner = _load_scanner()
-        except RuntimeError as e:
-            self._q.put(("scan_error", {"error": str(e)}))
-            return
-
-        def on_progress(done: int, total: int) -> None:
-            frac = done / total if total else 0
-            self._q.put(("scan_progress", {
-                "done": done, "total": total, "fraction": frac,
-            }))
-
-        def rar_decision(rar_path, count: int) -> bool:
-            # Ask the main thread — block until user answers.
-            self._rar_decision_event.clear()
-            self._q.put(("rar_prompt", {
-                "path": str(rar_path), "count": count,
-            }))
-            self._rar_decision_event.wait()
-            return self._rar_decision_value
-
-        try:
-            findings = scanner.scan(
-                root,
-                rar_decision=rar_decision,
-                on_progress=on_progress,
-                include_browsers=include_browsers,
-            )
-            # Echo the opt-in back into findings so the backend report knows
-            # whether the absence of browser history is "nothing found" or
-            # "user opted out". This keeps the signal explicit on the wire.
-            findings["include_browsers"] = include_browsers
-            self._q.put(("scan_done", {"findings": findings}))
-        except Exception as e:
-            import traceback
-            self._q.put(("scan_error", {
-                "error": f"{e}\n\n{traceback.format_exc()}",
-            }))
-
-    def _disk_worker(self, image_path: Path) -> None:
-        """
-        Run Sleuth Kit locally against a single disk image.
-
-        Heavy lifting (mmls / fsstat / fls -rd / tsk_recover -e) all happens
-        in this thread so the Tk event loop stays responsive. Progress is
-        funnelled back to the main thread via the event queue — see
-        `_handle_event` for the "disk_*" branches.
-
-        Recovered deleted files land on the investigator's Desktop under
-        `TheDeletedFiles/<image_stem>/` so they can open the folder
-        immediately from the summary panel.
-        """
-        try:
-            tsk = _load_tsk_runner()
-        except RuntimeError as e:
-            self._q.put(("scan_error", {"error": str(e)}))
-            return
-
-        # Fail fast with a friendly message if the TSK binaries are missing
-        # from the PyInstaller bundle AND the system PATH. This is much
-        # better than letting subprocess blow up 200 lines deeper.
-        try:
-            runner = tsk.LocalTSKRunner(image_path)
-            if not runner.is_available:
-                self._q.put(("scan_error", {
-                    "error": (
-                        "Sleuth Kit is not available on this machine.\n\n"
-                        f"{runner.why_missing()}\n\n"
-                        "Windows: place the .exe binaries in agent/vendor/tsk/ "
-                        "before building, or install Sleuth Kit and add it to PATH.\n"
-                        "macOS:   brew install sleuthkit\n"
-                        "Linux:   apt-get install sleuthkit"
-                    ),
-                }))
-                return
-        except Exception as e:
-            self._q.put(("scan_error", {"error": f"TSK runner init failed: {e}"}))
-            return
-
-        # Forward log lines from the runner to the status label so the user
-        # sees which TSK tool is running. `on_log` is called on the worker
-        # thread, so we route through the event queue.
-        def on_log(line: str) -> None:
-            self._q.put(("disk_log", {"text": line}))
-
-        # Desktop recovery folder: %USERPROFILE%\Desktop\TheDeletedFiles\
-        # on Windows, ~/Desktop/TheDeletedFiles/ elsewhere. tsk_runner
-        # picks the right one and creates per-image subdirectories.
-        try:
-            root_out = tsk.desktop_deleted_files_dir()
-            out_dir = root_out / image_path.stem
-            out_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            self._q.put(("scan_error", {
-                "error": f"Could not create recovery directory: {e}",
-            }))
-            return
-
-        try:
-            report = runner.analyse(out_dir, on_log=on_log, deleted_only=True)
-        except Exception as e:
-            import traceback
-            self._q.put(("scan_error", {
-                "error": f"{e}\n\n{traceback.format_exc()}",
-            }))
-            return
-
-        # Wrap the TSK report in a findings-shaped dict so the rest of the
-        # pipeline (submit button, backend ingestion, summary renderer)
-        # doesn't need to know a disk image was analysed differently.
-        #
-        # tsk_runner returns filesystem info under `fsstat` — we mirror it
-        # to `filesystem` in findings so the backend template and the
-        # GUI summary have a predictable key to look under.
-        fsstat = report.get("fsstat", {}) or {}
-        errors = [report["error"]] if report.get("error") else []
-        findings: Dict[str, Any] = {
-            "agent_version": APP_VERSION,
-            "platform": platform.platform(),
-            "scan_root": str(image_path),
-            "analysis_type": "disk_image",
-            "tsk_disk_analysis": report,
-            "recovery_path": str(out_dir),
-            "deleted_files": report.get("deleted_files", []),
-            "recovered_files": report.get("recovered_files", []),
-            "summary": {
-                "total_files": len(report.get("deleted_files", [])),
-                "total_size_bytes": 0,
-                "by_type": {"deleted_file": len(report.get("deleted_files", []))},
-                "disk_image": image_path.name,
-                "partitions": len(report.get("partitions", [])),
-                "filesystem": fsstat,
-                "recovered_count": report.get("recovered_count", 0),
-                "deleted_total": report.get("total_deleted", 0),
-            },
-            "errors": errors,
-            "include_browsers": False,
-        }
-        self._q.put(("scan_done", {"findings": findings, "mode": "disk"}))
-
-    def _submit_worker(
-        self,
-        url: str,
-        key: str,
-        findings: Dict[str, Any],
-        disk_images: Optional[list] = None,
-    ) -> None:
-        """
-        Two-phase submit:
-
-            1. POST findings JSON → /api/agent/findings          (small, fast)
-            2. For each opted-in disk image, POST the raw bytes →
-               /api/agent/upload                                  (large, slow)
-
-        Phase 2 is optional — only runs if the user ticked the auto-upload
-        checkbox in the summary panel. Each disk-image upload creates its
-        own case on the backend (Sleuth Kit needs to walk partitions / run
-        mmls, fsstat, fls, tsk_recover etc.), so we return those case IDs
-        alongside the logical-scan case ID for the case panel to render.
-        """
-        disk_images = list(disk_images or [])
-        try:
-            # ── Phase 1: logical-scan findings ─────────────────────────
-            headers = {
-                "X-API-Key": key,
-                "Content-Type": "application/json",
-                "User-Agent": f"forensic-agent-gui/{APP_VERSION}",
-            }
-            r = requests.post(
-                f"{url}/api/agent/findings",
-                headers=headers,
-                data=json.dumps(findings),
-                timeout=90,
-            )
-            if r.status_code >= 400:
-                self._q.put(("submit_error", {
-                    "status": r.status_code,
-                    "body": r.text[:500],
-                }))
-                return
-            data = r.json()
-
-            # ── Phase 2: disk-image uploads (opt-in) ────────────────────
-            disk_cases: list = []
-            if disk_images:
-                # Per-upload progress so the user knows we haven't hung.
-                total = len(disk_images)
-                for i, img_path_str in enumerate(disk_images, 1):
-                    img_path = Path(img_path_str)
-                    if not img_path.exists():
-                        disk_cases.append({
-                            "path": img_path_str,
-                            "error": "File no longer exists on disk.",
-                        })
-                        continue
-                    try:
-                        self._q.put(("submit_progress", {
-                            "text": f"Uploading disk image {i}/{total}: "
-                                    f"{img_path.name} ({_fmt_size(img_path.stat().st_size)})…",
-                        }))
-                    except Exception:
-                        pass
-                    try:
-                        with img_path.open("rb") as fh:
-                            # Stream the file so we don't hold a multi-GB
-                            # image in memory. `requests` handles chunking
-                            # when `files=` is a file-like object.
-                            up = requests.post(
-                                f"{url}/api/agent/upload",
-                                headers={
-                                    "X-API-Key": key,
-                                    "User-Agent": f"forensic-agent-gui/{APP_VERSION}",
-                                },
-                                files={"evidence": (img_path.name, fh, "application/octet-stream")},
-                                data={
-                                    "keywords": ",".join(findings.get("keywords") or []) or "password,login,bitcoin,admin,secret",
-                                    "investigator": findings.get("investigator", "agent"),
-                                },
-                                # Big timeout for big files — backend needs
-                                # time to accept the multipart body. After
-                                # upload, TSK runs async in a bg task.
-                                timeout=60 * 30,  # 30 minutes
-                            )
-                        if up.status_code >= 400:
-                            disk_cases.append({
-                                "path": img_path_str,
-                                "error": f"HTTP {up.status_code}: {up.text[:200]}",
-                            })
-                        else:
-                            disk_cases.append({
-                                "path": img_path_str,
-                                **up.json(),
-                            })
-                    except Exception as ue:
-                        disk_cases.append({
-                            "path": img_path_str,
-                            "error": str(ue),
-                        })
-                data["disk_cases"] = disk_cases
-
-            self._q.put(("submit_done", data))
-        except Exception as e:
-            self._q.put(("submit_error", {"error": str(e)}))
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Event queue drain — runs on main thread
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _drain_queue(self) -> None:
-        try:
-            while True:
-                name, payload = self._q.get_nowait()
-                self._handle_event(name, payload)
-        except queue.Empty:
-            pass
-        self.after(50, self._drain_queue)
-
-    def _handle_event(self, name: str, p: dict) -> None:
-        if name == "test_result":
-            if p.get("ok"):
-                self._lbl_test.configure(
-                    text="✓ Backend reachable.", text_color=COLOR_SUCCESS,
-                )
-            elif "error" in p:
-                self._lbl_test.configure(
-                    text=f"✗ {p['error'][:60]}", text_color=COLOR_DANGER,
-                )
-            else:
-                self._lbl_test.configure(
-                    text=f"✗ HTTP {p.get('status')}", text_color=COLOR_DANGER,
-                )
-            self._btn_test.configure(state="normal")
-
-        elif name == "scan_progress":
-            self._progress.set(p["fraction"])
-            self._lbl_scan_status.configure(
-                text=f"Scanned {p['done']:,} of {p['total']:,} files "
-                     f"({p['fraction']*100:.0f}%)",
-                text_color=COLOR_ACCENT,
-            )
-            self._set_counter(self._lbl_counter_files, f"{p['done']:,}")
-
-        elif name == "disk_log":
-            # TSK runner emits a log line per tool invocation / partition.
-            # Mirror it into the "current file" label so the user has some
-            # sign of life during long tsk_recover runs.
-            self._lbl_current.configure(
-                text=p.get("text", ""), text_color=COLOR_DIM,
-            )
-            # Nudge the indeterminate progress bar forward in small steps —
-            # we don't know the real fraction for TSK, but any movement
-            # beats a frozen bar.
-            try:
-                cur = float(self._progress.get())
-                if cur < 0.9:
-                    self._progress.set(min(cur + 0.05, 0.9))
-            except Exception:
-                pass
-
-        elif name == "rar_prompt":
-            self._show_rar_dialog(p["path"], p["count"])
-
-        elif name == "scan_done":
-            self._findings = p["findings"]
-            self._progress.set(1)
-            summary = p["findings"].get("summary", {})
-            is_disk = p["findings"].get("analysis_type") == "disk_image"
-            if is_disk:
-                deleted_n = len(p["findings"].get("deleted_files", []))
-                recovered_n = summary.get("recovered_count", 0)
-                self._lbl_scan_status.configure(
-                    text=f"✓ Sleuth Kit analysis complete — {deleted_n:,} deleted "
-                         f"entries found, {recovered_n:,} recovered to Desktop.",
-                    text_color=COLOR_SUCCESS,
-                )
-                self._set_counter(self._lbl_counter_files, f"{deleted_n:,}")
-                self._set_counter(self._lbl_counter_errors,
-                                  str(len(p["findings"].get("errors", []))))
-                self._set_counter(self._lbl_counter_images, "1")
-                self._btn_scan.configure(state="normal", text="💿  Analyze Again")
-            else:
-                self._lbl_scan_status.configure(
-                    text=f"✓ Scan complete — {summary.get('total_files', 0):,} files processed.",
-                    text_color=COLOR_SUCCESS,
-                )
-                self._set_counter(self._lbl_counter_files, f"{summary.get('total_files', 0):,}")
-                self._set_counter(self._lbl_counter_errors, str(len(p["findings"].get("errors", []))))
-                self._set_counter(
-                    self._lbl_counter_images,
-                    str(len(p["findings"].get("images_to_upload", []))),
-                )
-                self._btn_scan.configure(state="normal", text="▶  Scan Again")
-            self._set_chip("● Done", COLOR_SUCCESS)
-            self._render_summary(p["findings"])
-
-        elif name == "scan_error":
-            # Restore a sensible button label for the current mode.
-            restore_text = "💿  Analyze Disk Image" if self._mode == "disk" else "▶  Start Scan"
-            self._btn_scan.configure(state="normal", text=restore_text)
-            self._lbl_scan_status.configure(
-                text="✗ Analysis failed — see dialog.", text_color=COLOR_DANGER,
-            )
-            self._set_chip("● Error", COLOR_DANGER)
-            messagebox.showerror(APP_TITLE, f"Analysis failed:\n\n{p['error']}")
-
-        elif name == "submit_progress":
-            # Fired during phase-2 disk image uploads so the user sees
-            # "Uploading 1/3: memory.e01 (2.4 GB)…" instead of a frozen UI.
-            self._lbl_submit_status.configure(
-                text=p.get("text", "Uploading…"),
-                text_color=COLOR_ACCENT,
-            )
-
-        elif name == "submit_done":
-            self._case_id = p.get("case_id")
-            self._btn_submit.configure(state="normal", text="✓ Submitted")
-            n_disk = len(p.get("disk_cases") or [])
-            self._lbl_submit_status.configure(
-                text=(
-                    f"✓ Findings submitted. {n_disk} disk-image case(s) queued."
-                    if n_disk else "✓ Findings submitted."
-                ),
-                text_color=COLOR_SUCCESS,
-            )
-            self._set_chip("● Done", COLOR_SUCCESS)
-            self._render_case(p)
-
-        elif name == "submit_error":
-            self._btn_submit.configure(state="normal", text="Submit to Backend")
-            err = p.get("error") or f"HTTP {p.get('status')}: {p.get('body', '')}"
-            self._lbl_submit_status.configure(
-                text=f"✗ Submit failed: {err[:80]}", text_color=COLOR_DANGER,
-            )
-            self._set_chip("● Error", COLOR_DANGER)
-            messagebox.showerror(APP_TITLE, f"Submit failed:\n\n{err}")
-
-    # ─────────────────────────────────────────────────────────────────────
-    # RAR decision dialog
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _show_rar_dialog(self, path: str, count: int) -> None:
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("RAR archive detected")
-        dlg.geometry("520x260")
-        dlg.configure(fg_color=COLOR_PANEL)
-        dlg.transient(self)
-        dlg.grab_set()
-
-        ctk.CTkLabel(
-            dlg, text=f"Found {count} .rar archive{'s' if count != 1 else ''}",
-            font=ctk.CTkFont(size=18, weight="bold"),
-            text_color=COLOR_TEXT,
-        ).pack(padx=24, pady=(24, 6), anchor="w")
-
-        ctk.CTkLabel(
-            dlg, text=f"Sample: {_short_path(path, 56)}",
-            font=ctk.CTkFont(size=11, family="monospace"),
-            text_color=COLOR_MUTED,
-        ).pack(padx=24, pady=(0, 14), anchor="w")
-
-        ctk.CTkLabel(
-            dlg,
-            text="Including RAR contents requires `unrar` (macOS: `brew install "
-                 "rar`; Windows: install WinRAR).\n\n"
-                 "Without it, the scan still continues — RAR files are hashed, "
-                 "but their contents aren't walked.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_DIM,
-            justify="left", wraplength=460,
-        ).pack(padx=24, pady=(0, 16), anchor="w")
-
-        row = ctk.CTkFrame(dlg, fg_color="transparent")
-        row.pack(padx=24, pady=(0, 20), anchor="e")
-
-        def answer(include: bool):
-            self._rar_decision_value = include
-            self._rar_decision_event.set()
-            dlg.destroy()
-
-        ctk.CTkButton(
-            row, text="Skip RARs", width=120, height=36,
-            fg_color=COLOR_CARD, hover_color=COLOR_BG, text_color=COLOR_TEXT,
-            command=lambda: answer(False),
-        ).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(
-            row, text="Include (needs unrar)", width=180, height=36,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, text_color="white",
-            command=lambda: answer(True),
-        ).pack(side="left")
-
-        dlg.protocol("WM_DELETE_WINDOW", lambda: answer(False))
-
-    # ─────────────────────────────────────────────────────────────────────
-    # Summary & case result rendering
-    # ─────────────────────────────────────────────────────────────────────
-
-    def _clear_summary(self) -> None:
-        for w in self._summary_body.winfo_children():
-            w.destroy()
-        self._lbl_summary_empty = ctk.CTkLabel(
-            self._summary_body, text="Scan results will appear here.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
-        )
-        self._lbl_summary_empty.pack(anchor="w", pady=4)
-
-    def _render_summary(self, findings: Dict[str, Any]) -> None:
-        for w in self._summary_body.winfo_children():
-            w.destroy()
-
-        s = findings.get("summary", {})
-        by_type = s.get("by_type", {})
-
-        # Disk-image analyses get a dedicated panel up top with the Sleuth
-        # Kit filesystem summary, the deleted files list, and a shortcut
-        # to open the recovery folder on the Desktop.
-        if findings.get("analysis_type") == "disk_image":
-            self._render_disk_summary(findings)
-
-        # Cards row — top-level stats
-        stats = ctk.CTkFrame(self._summary_body, fg_color="transparent")
-        stats.pack(fill="x", pady=(0, 16))
-        if findings.get("analysis_type") == "disk_image":
-            tsk = findings.get("tsk_disk_analysis", {})
-            self._stat_card(stats, "Deleted Files",
-                            f"{len(findings.get('deleted_files', [])):,}")
-            self._stat_card(stats, "Recovered",
-                            f"{tsk.get('recovered_count', 0):,}")
-            self._stat_card(stats, "Partitions",
-                            f"{len(tsk.get('partitions', [])):,}")
-            fs = tsk.get("fsstat") or {}
-            self._stat_card(stats, "Filesystem",
-                            fs.get("fs_type", "—") or "—")
-        else:
-            self._stat_card(stats, "Total Files", f"{s.get('total_files', 0):,}")
-            self._stat_card(stats, "Total Size", _fmt_size(s.get("total_size_bytes", 0)))
-            self._stat_card(stats, "With Metadata", f"{s.get('with_exif', 0):,}")
-            self._stat_card(stats, "Text Extracted", f"{s.get('with_text', 0):,}")
-
-        # By-type grid
-        if by_type:
-            ctk.CTkLabel(
-                self._summary_body, text="File types",
-                font=ctk.CTkFont(size=13, weight="bold"),
-                text_color=COLOR_DIM,
-            ).pack(anchor="w", pady=(4, 8))
-
-            grid = ctk.CTkFrame(self._summary_body, fg_color="transparent")
-            grid.pack(fill="x", pady=(0, 16))
-            for i, (t, n) in enumerate(sorted(by_type.items(), key=lambda x: -x[1])):
-                self._type_pill(grid, t, n).pack(
-                    side="left", padx=(0, 8), pady=(0, 8),
-                )
-
-        # Disk images & RAR warnings
-        # Skip the "also upload the disk image to the server" prompt in
-        # disk-image mode — we've already done a full local TSK analysis,
-        # and re-uploading the image would just repeat work server-side.
-        imgs = findings.get("images_to_upload", [])
-        if findings.get("analysis_type") == "disk_image":
-            imgs = []
-        # Default: off — uploading a multi-GB disk image over a cold-start
-        # free-tier backend can time out. Investigator opts in explicitly.
-        self._opt_upload_images = ctk.BooleanVar(value=False)
-        if imgs:
-            box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
-            box.pack(fill="x", pady=(4, 8))
-            ctk.CTkLabel(
-                box, text=f"💿  {len(imgs)} disk image(s) flagged for server-side TSK",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=COLOR_WARN,
-            ).pack(anchor="w", padx=12, pady=(8, 2))
-            # Detail rows so the user can see exactly *which* disk images
-            # the scanner found before agreeing to upload them.
-            for p in imgs[:5]:
-                ctk.CTkLabel(
-                    box, text=f"   • {p}",
-                    font=ctk.CTkFont(size=11, family="monospace"),
-                    text_color=COLOR_DIM,
-                ).pack(anchor="w", padx=12)
-            if len(imgs) > 5:
-                ctk.CTkLabel(
-                    box, text=f"   … and {len(imgs) - 5} more",
-                    font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
-                ).pack(anchor="w", padx=12)
-            ctk.CTkCheckBox(
-                box,
-                text="Also upload these disk images for Sleuth Kit analysis "
-                     "(may take several minutes)",
-                variable=self._opt_upload_images,
-                font=ctk.CTkFont(size=12),
-                text_color=COLOR_TEXT,
-                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            ).pack(anchor="w", padx=12, pady=(6, 10))
-
-        errs = findings.get("errors", [])
-        if errs:
-            box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
-            box.pack(fill="x", pady=(4, 8))
-            ctk.CTkLabel(
-                box, text=f"⚠  {len(errs)} file(s) failed — see findings JSON for details",
-                font=ctk.CTkFont(size=12),
-                text_color=COLOR_DIM,
-            ).pack(anchor="w", padx=12, pady=8)
-
-        # Submit button
-        submit_row = ctk.CTkFrame(self._summary_body, fg_color="transparent")
-        submit_row.pack(fill="x", pady=(16, 0))
-
-        self._btn_submit = ctk.CTkButton(
-            submit_row, text="Submit to Backend", height=44, width=220,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            text_color="white", font=ctk.CTkFont(size=14, weight="bold"),
-            command=self._on_submit,
-        )
-        self._btn_submit.pack(side="left")
-
-        self._btn_save = ctk.CTkButton(
-            submit_row, text="Save JSON…", height=44, width=140,
-            fg_color=COLOR_CARD, hover_color=COLOR_BG,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._on_save_json,
-        )
-        self._btn_save.pack(side="left", padx=(12, 0))
-
-        self._lbl_submit_status = ctk.CTkLabel(
-            submit_row, text="Findings will be POSTed to /api/agent/findings.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
-        )
-        self._lbl_submit_status.pack(side="left", padx=(16, 0))
-
-    def _render_disk_summary(self, findings: Dict[str, Any]) -> None:
-        """
-        Top-of-summary panel for disk-image analyses: partitions, filesystem
-        info, a "reveal recovery folder" button, and the list of deleted
-        filenames with their recovery status.
-        """
-        tsk = findings.get("tsk_disk_analysis", {})
-        recovery_path = findings.get("recovery_path") or ""
-        deleted = findings.get("deleted_files", []) or []
-
-        # Header card: big success banner + recovery path + open button.
-        banner = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=12)
-        banner.pack(fill="x", pady=(0, 12))
-
-        ctk.CTkLabel(
-            banner,
-            text=f"💿  Sleuth Kit analysis complete",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            text_color=COLOR_SUCCESS,
-        ).pack(anchor="w", padx=16, pady=(12, 4))
-
-        img_name = findings.get("summary", {}).get("disk_image", "(unknown)")
-        ctk.CTkLabel(
-            banner,
-            text=f"Image: {img_name}   ·   "
-                 f"{len(tsk.get('partitions', []))} partition(s)   ·   "
-                 f"{len(deleted):,} deleted file(s) recovered to Desktop",
-            font=ctk.CTkFont(size=12), text_color=COLOR_DIM,
-            justify="left", wraplength=760,
-        ).pack(anchor="w", padx=16, pady=(0, 6))
-
-        if recovery_path:
-            ctk.CTkLabel(
-                banner,
-                text=f"📂  {recovery_path}",
-                font=ctk.CTkFont(size=11, family="monospace"),
-                text_color=COLOR_ACCENT,
-            ).pack(anchor="w", padx=16, pady=(0, 10))
-
-            btn_row = ctk.CTkFrame(banner, fg_color="transparent")
-            btn_row.pack(anchor="w", padx=16, pady=(0, 14))
-
-            def open_folder() -> None:
-                """Open the recovery folder in the native file manager."""
-                target = recovery_path
-                try:
-                    if platform.system() == "Windows":
-                        os.startfile(target)  # type: ignore[attr-defined]
-                    elif platform.system() == "Darwin":
-                        import subprocess
-                        subprocess.Popen(["open", target])
-                    else:
-                        import subprocess
-                        subprocess.Popen(["xdg-open", target])
-                except Exception as e:
-                    messagebox.showerror(APP_TITLE, f"Could not open folder:\n{e}")
-
-            ctk.CTkButton(
-                btn_row, text="📂  Open TheDeletedFiles Folder",
-                height=38, width=260,
-                fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-                text_color="white", font=ctk.CTkFont(size=12, weight="bold"),
-                command=open_folder,
-            ).pack(side="left", padx=(0, 8))
-
-        # Per-partition filesystem detail (from fsstat).
-        fs = tsk.get("fsstat") or {}
-        if fs:
-            fs_box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
-            fs_box.pack(fill="x", pady=(0, 12))
-            ctk.CTkLabel(
-                fs_box, text="Filesystem",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=COLOR_DIM,
-            ).pack(anchor="w", padx=12, pady=(10, 2))
-            lines = []
-            for k, label in (
-                ("fs_type", "Type"),
-                ("volume_name", "Label"),
-                ("last_mount", "Last Mount"),
-                ("block_size", "Block Size"),
-                ("block_count", "Block Count"),
-            ):
-                v = fs.get(k)
-                if v:
-                    lines.append(f"{label}: {v}")
-            ctk.CTkLabel(
-                fs_box, text="   ·   ".join(lines) or "—",
-                font=ctk.CTkFont(size=11, family="monospace"),
-                text_color=COLOR_TEXT, justify="left",
-            ).pack(anchor="w", padx=12, pady=(0, 10))
-
-        # The deleted-files list — this is the payoff the user asked for:
-        # "tell me exactly which files were deleted". Show up to 200 and
-        # truncate the rest so a huge image doesn't hang the UI.
-        if deleted:
-            # Build a set of recovered basenames so we can mark each fls
-            # entry with ✓ when its bytes are on disk in TheDeletedFiles.
-            # fls gives us the original filesystem path; tsk_recover puts
-            # the recovered bytes into subdirs keyed by the original path,
-            # so matching on basename is a good-enough heuristic for the UI.
-            recovered_files = findings.get("recovered_files", []) or []
-            recovered_basenames = {
-                (r.get("name") or "").lower() for r in recovered_files
-            }
-
-            list_box = ctk.CTkFrame(self._summary_body, fg_color=COLOR_CARD, corner_radius=8)
-            list_box.pack(fill="x", pady=(0, 12))
-            ctk.CTkLabel(
-                list_box,
-                text=f"🗑  Deleted files ({len(deleted):,})",
-                font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=COLOR_WARN,
-            ).pack(anchor="w", padx=12, pady=(10, 4))
-
-            # Embed a read-only CTkTextbox instead of a pile of labels —
-            # O(1) widgets regardless of file count, and the user can
-            # copy/paste entries straight out.
-            tbx = ctk.CTkTextbox(
-                list_box, height=240, fg_color=COLOR_BG,
-                text_color=COLOR_TEXT, font=ctk.CTkFont(size=11, family="monospace"),
-                wrap="none",
-            )
-            tbx.pack(fill="x", padx=12, pady=(0, 10))
-            max_rows = 200
-            for entry in deleted[:max_rows]:
-                inode = str(entry.get("inode") or "?")
-                name = entry.get("name") or "(unnamed)"
-                base = name.rsplit("/", 1)[-1].lower()
-                recovered_mark = "✓" if base in recovered_basenames else "·"
-                tbx.insert("end", f"{recovered_mark}  {inode:>14}  {name}\n")
-            if len(deleted) > max_rows:
-                tbx.insert(
-                    "end",
-                    f"\n… and {len(deleted) - max_rows:,} more — "
-                    f"see the recovery folder or the findings JSON.\n",
-                )
-            tbx.configure(state="disabled")
-
-            ctk.CTkLabel(
-                list_box,
-                text="✓ = recovered to disk   ·   · = metadata only (bytes not carved)",
-                font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
-            ).pack(anchor="w", padx=12, pady=(0, 10))
-
-    def _stat_card(self, parent, label: str, value: str) -> None:
-        card = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=10)
-        card.pack(side="left", padx=(0, 12), ipadx=14, ipady=8)
-        ctk.CTkLabel(
-            card, text=value, font=ctk.CTkFont(size=20, weight="bold"),
-            text_color=COLOR_TEXT,
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            card, text=label, font=ctk.CTkFont(size=11),
-            text_color=COLOR_MUTED,
-        ).pack(anchor="w")
-
-    def _type_pill(self, parent, ftype: str, n: int) -> ctk.CTkFrame:
-        colors = {
-            "image": "#3b82f6", "pdf": "#ef4444", "docx": "#2563eb",
-            "text": "#10b981", "archive_zip": "#a855f7", "archive_rar": "#f59e0b",
-            "disk_image": "#f97316", "other": COLOR_MUTED,
-        }
-        color = colors.get(ftype, COLOR_MUTED)
-        pill = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8)
-        row = ctk.CTkFrame(pill, fg_color="transparent")
-        row.pack(padx=10, pady=6)
-        ctk.CTkLabel(
-            row, text=ftype.replace("_", " "),
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=color,
-        ).pack(side="left")
-        ctk.CTkLabel(
-            row, text=f"{n:,}", font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=COLOR_TEXT,
-        ).pack(side="left", padx=(8, 0))
-        return pill
 
     def _on_save_json(self) -> None:
         if not self._findings:
@@ -1518,163 +1124,1031 @@ class ForensicAgentApp(ctk.CTk):
             return
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self._findings, f, indent=2)
+                json.dump(self._findings, f, indent=2, default=str)
             messagebox.showinfo(APP_TITLE, f"Saved to\n{path}")
         except OSError as e:
             messagebox.showerror(APP_TITLE, f"Save failed:\n{e}")
 
-    def _clear_case(self) -> None:
-        for w in self._case_body.winfo_children():
-            w.destroy()
-        self._lbl_case_empty = ctk.CTkLabel(
-            self._case_body, text="After submission, your Case ID appears here.",
-            font=ctk.CTkFont(size=12), text_color=COLOR_MUTED,
+    # ─────────────────────────────────────────────────────────────────
+    # Background workers  (must not touch Tk — use self._q)
+    # ─────────────────────────────────────────────────────────────────
+
+    def _scan_worker(self, root: Path, include_browsers: bool,
+                     recover_deleted: bool) -> None:
+        """
+        Main analysis pipeline. Runs entirely on a background thread.
+
+        Phase 1: scanner.py — hashes, metadata, browser history (opt-in).
+        Phase 2: auto-detect disk images inside the folder and run TSK on
+                 each one if the investigator opted into recovery.
+        Phase 3: compute 'recently modified' file list for the summary tab.
+        """
+        try:
+            scanner = _load_scanner()
+        except RuntimeError as e:
+            self._q.put(("scan_error", {"error": str(e)}))
+            return
+
+        def on_progress(done: int, total: int) -> None:
+            frac = done / total if total else 0
+            # Reserve the last 20 % of the bar for the TSK phase so the bar
+            # doesn't jump back when the second phase starts.
+            self._q.put(("scan_progress", {
+                "done": done, "total": total,
+                "fraction": min(frac * 0.8, 0.8) if recover_deleted else frac,
+            }))
+
+        def rar_decision(rar_path, count: int) -> bool:
+            self._rar_decision_event.clear()
+            self._q.put(("rar_prompt", {"path": str(rar_path), "count": count}))
+            self._rar_decision_event.wait()
+            return self._rar_decision_value
+
+        # ── Phase 1: logical scan ─────────────────────────────────────
+        try:
+            findings = scanner.scan(
+                root,
+                rar_decision=rar_decision,
+                on_progress=on_progress,
+                include_browsers=include_browsers,
+            )
+        except Exception as e:
+            import traceback
+            self._q.put(("scan_error", {
+                "error": f"{e}\n\n{traceback.format_exc()}",
+            }))
+            return
+
+        findings["include_browsers"] = include_browsers
+
+        # ── Phase 2: auto-detect disk images & run TSK on them ───────
+        tsk_results: List[Dict[str, Any]] = []
+        recovered_total = 0
+        if recover_deleted:
+            disk_images = self._find_disk_images(findings, root)
+            if disk_images:
+                try:
+                    tsk_runner = _load_tsk_runner()
+                except RuntimeError as e:
+                    self._q.put(("disk_log", {
+                        "text": f"(Sleuth Kit module unavailable: {e})"
+                    }))
+                    tsk_runner = None
+
+                if tsk_runner is not None:
+                    for idx, img in enumerate(disk_images, 1):
+                        self._q.put(("disk_log", {
+                            "text": f"[{idx}/{len(disk_images)}] Sleuth Kit on "
+                                    f"{img.name}…",
+                        }))
+                        result = self._run_tsk_on_image(tsk_runner, img)
+                        tsk_results.append(result)
+                        if result.get("recovered_count"):
+                            recovered_total += int(result["recovered_count"])
+                        # Nudge progress bar forward in the reserved 20 %.
+                        self._q.put(("disk_log_progress", {
+                            "fraction": 0.8 + 0.2 * (idx / len(disk_images)),
+                        }))
+
+        findings["tsk_disk_analyses"] = tsk_results
+        findings["recovered_total"] = recovered_total
+
+        # ── Phase 3: recently-modified list ──────────────────────────
+        findings["modified_recent"] = self._extract_modified(
+            findings.get("files") or [],
+            window_days=DEFAULT_MODIFIED_WINDOW_DAYS,
         )
-        self._lbl_case_empty.pack(anchor="w", pady=4)
 
-    def _render_case(self, data: Dict[str, Any]) -> None:
-        for w in self._case_body.winfo_children():
-            w.destroy()
+        # ── Phase 4: system Trash / Recycle Bin enumeration ──────────
+        # Always runs, regardless of recover_deleted. The user explicitly
+        # wants to see what's deleted on their machine — the recover_deleted
+        # toggle only governs whether we bother to *carve* TSK-level deletions
+        # from disk images, not whether we list the OS trash.
+        try:
+            self._q.put(("disk_log", {
+                "text": "Enumerating system Trash / Recycle Bin…",
+            }))
+            findings["system_trash"] = scan_system_trash()
+        except Exception as e:
+            findings["system_trash"] = []
+            findings.setdefault("errors", []).append({
+                "path": "<system trash>",
+                "error": f"trash enumeration failed: {e}",
+            })
 
-        case_id = data.get("case_id", "")
+        self._q.put(("scan_done", {"findings": findings}))
+
+    def _find_disk_images(self, findings: Dict[str, Any],
+                          root: Path) -> List[Path]:
+        """
+        Return a list of disk-image file paths within the investigated folder.
+        We prefer the scanner's own classification (it already knows what a
+        disk_image is) but also fall back to an extension match in case the
+        classifier missed something (e.g. a .img file the user dropped in).
+        """
+        seen: Dict[str, Path] = {}
+        for p in findings.get("images_to_upload") or []:
+            path = Path(p)
+            if path.exists():
+                seen[str(path)] = path
+        # Belt & braces: glob by extension in case the scanner skipped.
+        try:
+            if root.is_dir():
+                for ext in DISK_IMAGE_EXTS:
+                    for hit in root.rglob(f"*{ext}"):
+                        if hit.is_file():
+                            seen[str(hit)] = hit
+        except OSError:
+            pass
+        return list(seen.values())
+
+    def _run_tsk_on_image(self, tsk_runner, image: Path) -> Dict[str, Any]:
+        """
+        Execute `LocalTSKRunner(image).analyse(...)` with progress logging
+        routed through the event queue. Returns a dict shaped for the
+        Deleted-Files tab: image path, partitions, fs info, deleted list,
+        recovered list, and the recovery folder.
+        """
+        def on_log(line: str) -> None:
+            self._q.put(("disk_log", {"text": f"  {line}"}))
+
+        try:
+            runner = tsk_runner.LocalTSKRunner(image)
+            if not runner.is_available:
+                return {
+                    "image": str(image),
+                    "error": runner.why_missing(),
+                    "tsk_available": False,
+                }
+            out_dir = tsk_runner.desktop_deleted_files_dir() / image.stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+            result = runner.analyse(out_dir, on_log=on_log, deleted_only=True)
+            return {
+                "image": str(image),
+                "image_name": image.name,
+                "recovery_path": str(out_dir),
+                "partitions": result.get("partitions") or [],
+                "fsstat": result.get("fsstat") or {},
+                "deleted_files": result.get("deleted_files") or [],
+                "recovered_files": result.get("recovered_files") or [],
+                "recovered_count": result.get("recovered_count", 0),
+                "total_deleted": result.get("total_deleted", 0),
+                "tsk_available": True,
+            }
+        except Exception as e:
+            import traceback
+            return {
+                "image": str(image),
+                "error": f"{e}\n\n{traceback.format_exc()}",
+                "tsk_available": True,
+            }
+
+    def _extract_modified(self, files: List[Dict[str, Any]],
+                          *, window_days: int) -> List[Dict[str, Any]]:
+        """
+        Return entries whose mtime falls within the last `window_days`,
+        sorted most-recent-first. Used to drive the Modified-Files tab.
+        """
+        cutoff = datetime.now(timezone.utc).timestamp() - window_days * 86400
+        out: List[Dict[str, Any]] = []
+        for f in files:
+            mtime_iso = f.get("mtime")
+            if not mtime_iso:
+                continue
+            try:
+                dt = datetime.strptime(mtime_iso.rstrip("Z"), "%Y-%m-%dT%H:%M:%S")
+                ts = dt.replace(tzinfo=timezone.utc).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if ts < cutoff:
+                continue
+            out.append({
+                "path": f.get("path") or f.get("relative_path") or f.get("name") or "",
+                "name": f.get("name") or "",
+                "type": f.get("type") or "",
+                "size": f.get("size") or 0,
+                "mtime": mtime_iso,
+                "atime": f.get("atime"),
+                "ctime": f.get("ctime"),
+                "_ts": ts,
+            })
+        out.sort(key=lambda x: x["_ts"], reverse=True)
+        for x in out:
+            x.pop("_ts", None)
+        return out
+
+    def _submit_worker(self, url: str, key: str,
+                       findings: Dict[str, Any]) -> None:
+        try:
+            headers = {
+                "X-API-Key": key,
+                "Content-Type": "application/json",
+                "User-Agent": f"forensic-agent-gui/{APP_VERSION}",
+            }
+            r = requests.post(
+                f"{url}/api/agent/findings",
+                headers=headers,
+                data=json.dumps(findings, default=str),
+                timeout=120,
+            )
+            if r.status_code >= 400:
+                self._q.put(("submit_error", {
+                    "status": r.status_code,
+                    "body": r.text[:500],
+                }))
+                return
+            self._q.put(("submit_done", r.json()))
+        except Exception as e:
+            self._q.put(("submit_error", {"error": str(e)}))
+
+    # ─────────────────────────────────────────────────────────────────
+    # Event queue drain — runs on main thread
+    # ─────────────────────────────────────────────────────────────────
+
+    def _drain_queue(self) -> None:
+        try:
+            while True:
+                name, payload = self._q.get_nowait()
+                self._handle_event(name, payload)
+        except queue.Empty:
+            pass
+        self.after(50, self._drain_queue)
+
+    def _handle_event(self, name: str, p: dict) -> None:
+        if name == "test_result":
+            if p.get("ok"):
+                self._lbl_test.configure(text="✓ Backend reachable.",
+                                         text_color=CLR_SUCCESS)
+            elif "error" in p:
+                self._lbl_test.configure(text=f"✗ {p['error'][:80]}",
+                                         text_color=CLR_DANGER)
+            else:
+                self._lbl_test.configure(text=f"✗ HTTP {p.get('status')}",
+                                         text_color=CLR_DANGER)
+            self._btn_test.configure(state="normal")
+
+        elif name == "scan_progress":
+            self._progress.set(p["fraction"])
+            self._lbl_run_status.configure(
+                text=f"Scanned {p['done']:,} of {p['total']:,} files "
+                     f"({p['fraction']*100:.0f}%)",
+                text_color=CLR_ACCENT,
+            )
+            self._set_counter(self._cnt_files, f"{p['done']:,}")
+
+        elif name == "disk_log":
+            self._lbl_current.configure(
+                text=p.get("text", "") or " ", text_color=CLR_TEXT_DIM,
+            )
+
+        elif name == "disk_log_progress":
+            self._progress.set(p.get("fraction", 0.9))
+
+        elif name == "rar_prompt":
+            self._show_rar_dialog(p["path"], p["count"])
+
+        elif name == "scan_done":
+            self._on_scan_done(p["findings"])
+
+        elif name == "scan_error":
+            self._btn_start.configure(state="normal", text="▶  Start Analysis")
+            self._lbl_run_status.configure(text="✗ Analysis failed — see dialog.",
+                                            text_color=CLR_DANGER)
+            self._set_chip("●  Error", CLR_DANGER)
+            self._set_statusbar("Error during analysis.")
+            messagebox.showerror(APP_TITLE, f"Analysis failed:\n\n{p['error']}")
+
+        elif name == "submit_done":
+            self._on_submit_done(p)
+
+        elif name == "submit_error":
+            self._btn_submit.configure(state="normal", text="Submit Findings")
+            err = p.get("error") or f"HTTP {p.get('status')}: {p.get('body', '')}"
+            self._lbl_submit_status.configure(
+                text=f"✗ Submit failed: {err[:180]}",
+                text_color=CLR_DANGER,
+            )
+            self._set_chip("●  Error", CLR_DANGER)
+            messagebox.showerror(APP_TITLE, f"Submit failed:\n\n{err}")
+
+    # ─────────────────────────────────────────────────────────────────
+    # Completion handlers
+    # ─────────────────────────────────────────────────────────────────
+
+    def _on_scan_done(self, findings: Dict[str, Any]) -> None:
+        self._findings = findings
+        self._progress.set(1)
+
+        # Roll up counters.
+        summary = findings.get("summary") or {}
+        total_files = summary.get("total_files") or len(findings.get("files") or [])
+        modified = findings.get("modified_recent") or []
+        tsk_list = findings.get("tsk_disk_analyses") or []
+        trash_items = findings.get("system_trash") or []
+        deleted_total = sum(len(t.get("deleted_files") or []) for t in tsk_list)
+        recovered_total = findings.get("recovered_total") or 0
+        errors = len(findings.get("errors") or [])
+
+        self._set_counter(self._cnt_files, f"{total_files:,}")
+        self._set_counter(self._cnt_modified, f"{len(modified):,}")
+        self._set_counter(self._cnt_deleted, f"{deleted_total:,}")
+        self._set_counter(self._cnt_trash, f"{len(trash_items):,}")
+        self._set_counter(self._cnt_recovered, f"{recovered_total:,}")
+        self._set_counter(self._cnt_errors, f"{errors:,}")
+
+        tsk_banner = ""
+        if tsk_list:
+            tsk_banner = (
+                f"  ·  {deleted_total:,} carved, {recovered_total:,} recovered"
+            )
+        trash_banner = (
+            f"  ·  {len(trash_items):,} in OS trash" if trash_items else ""
+        )
+        self._lbl_run_status.configure(
+            text=f"✓ Analysis complete — {total_files:,} files processed"
+                 f"{tsk_banner}{trash_banner}.",
+            text_color=CLR_SUCCESS,
+        )
+        self._lbl_current.configure(text=" ")
+        self._btn_start.configure(state="normal", text="▶  Re-Analyze")
+        self._set_chip("●  Done", CLR_SUCCESS)
+        self._set_statusbar(
+            f"Done  ·  {total_files:,} files  ·  {len(modified):,} modified  "
+            f"·  {deleted_total:,} carved  ·  {len(trash_items):,} in trash  "
+            f"·  {recovered_total:,} recovered"
+        )
+
+        self._render_results(findings)
+
+        # Unlock submission
+        self._btn_submit.configure(state="normal")
+        self._btn_save.configure(state="normal")
+        self._lbl_submit_status.configure(
+            text="Findings JSON is ready. Submit to backend or save locally.",
+            text_color=CLR_TEXT_DIM,
+        )
+
+    def _on_submit_done(self, data: Dict[str, Any]) -> None:
+        self._case_id = data.get("case_id")
+        self._btn_submit.configure(state="normal", text="✓ Submitted")
+        self._lbl_submit_status.configure(
+            text=f"✓ Submitted. Case {self._case_id}.",
+            text_color=CLR_SUCCESS,
+        )
+        self._set_chip("●  Submitted", CLR_SUCCESS)
+
+        # Replace/refresh case panel
+        if self._case_panel is not None:
+            self._case_panel.destroy()
+
         url = self._entry_url.get().strip().rstrip("/")
-        # Backend routes (defined in backend/main.py):
-        #   /case/{case_id}      — polished, client-safe HTML report
-        #   /results/{case_id}   — raw investigator JSON (hashes, paths, etc.)
-        #   /report/{case_id}    — PDF download
-        # The "Open Case in Browser" button points at the customer-facing
-        # report. Investigators who still need the raw JSON can hit
-        # /results/{case_id} manually or via the API.
-        case_url = f"{url}/case/{case_id}"
-        report_url = f"{url}/report/{case_id}"
+        case_url = f"{url}/case/{self._case_id}"
+        pdf_url = f"{url}/api/report/{self._case_id}/pdf"
 
-        # ID row
-        id_row = ctk.CTkFrame(self._case_body, fg_color=COLOR_CARD, corner_radius=10)
-        id_row.pack(fill="x", pady=(0, 12))
+        panel = ctk.CTkFrame(self._submit_body, fg_color=CLR_ELEVATED,
+                             corner_radius=10)
+        panel.pack(fill="x", pady=(14, 0))
+        self._case_panel = panel
+
+        # ID
         ctk.CTkLabel(
-            id_row, text="Case ID",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=COLOR_DIM,
+            panel, text="CASE ID",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_MUTED,
         ).pack(anchor="w", padx=16, pady=(12, 0))
         ctk.CTkLabel(
-            id_row, text=case_id,
-            font=ctk.CTkFont(size=18, weight="bold", family="monospace"),
-            text_color=COLOR_ACCENT,
+            panel, text=str(self._case_id),
+            font=ctk.CTkFont(size=17, weight="bold", family="Consolas"),
+            text_color=CLR_ACCENT,
         ).pack(anchor="w", padx=16, pady=(0, 12))
 
-        # Status
-        if data.get("status"):
-            ctk.CTkLabel(
-                self._case_body,
-                text=f"Status: {data['status']}",
-                font=ctk.CTkFont(size=12), text_color=COLOR_DIM,
-            ).pack(anchor="w", pady=(0, 12))
-
-        # Buttons
-        btn_row = ctk.CTkFrame(self._case_body, fg_color="transparent")
-        btn_row.pack(fill="x")
-
+        btn_row = ctk.CTkFrame(panel, fg_color="transparent")
+        btn_row.pack(fill="x", padx=16, pady=(0, 14))
         ctk.CTkButton(
-            btn_row, text="🌐  Open Case in Browser", height=42, width=220,
-            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-            text_color="white", font=ctk.CTkFont(size=13, weight="bold"),
+            btn_row, text="Open Case Report", height=38, width=180,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H, text_color="white",
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=lambda: webbrowser.open(case_url),
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
-            btn_row, text="📄  Download PDF Report", height=42, width=200,
-            fg_color=COLOR_CARD, hover_color=COLOR_BG,
-            text_color=COLOR_TEXT, font=ctk.CTkFont(size=13, weight="bold"),
-            command=lambda: webbrowser.open(report_url),
+            btn_row, text="Download PDF", height=38, width=140,
+            fg_color=CLR_SURFACE, hover_color=CLR_DIVIDER, text_color=CLR_TEXT,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: webbrowser.open(pdf_url),
         ).pack(side="left")
 
         ctk.CTkLabel(
-            self._case_body,
-            text=f"{case_url}",
-            font=ctk.CTkFont(size=10, family="monospace"),
-            text_color=COLOR_MUTED,
-        ).pack(anchor="w", pady=(12, 0))
+            panel, text=case_url,
+            font=ctk.CTkFont(size=10, family="Consolas"),
+            text_color=CLR_MUTED,
+        ).pack(anchor="w", padx=16, pady=(0, 12))
 
-        # ── Disk-image sub-cases ────────────────────────────────────────
-        # If the user opted into server-side TSK analysis, each disk image
-        # becomes its own case. Render them as a secondary list — status
-        # starts as "queued" and the backend processes them async via the
-        # `run_full_analysis` background task.
-        disk_cases = data.get("disk_cases") or []
-        if disk_cases:
+    def _reset_submit(self) -> None:
+        self._btn_submit.configure(state="disabled", text="Submit Findings")
+        self._btn_save.configure(state="disabled")
+        self._lbl_submit_status.configure(
+            text="Run the analysis to unlock submission.",
+            text_color=CLR_MUTED,
+        )
+        if self._case_panel is not None:
+            self._case_panel.destroy()
+            self._case_panel = None
+
+    # ─────────────────────────────────────────────────────────────────
+    # RAR decision dialog
+    # ─────────────────────────────────────────────────────────────────
+
+    def _show_rar_dialog(self, path: str, count: int) -> None:
+        dlg = ctk.CTkToplevel(self)
+        dlg.title("RAR archive detected")
+        dlg.geometry("520x240")
+        dlg.configure(fg_color=CLR_SURFACE)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ctk.CTkLabel(
+            dlg, text=f"Found {count} .rar archive{'s' if count != 1 else ''}",
+            font=ctk.CTkFont(size=17, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(padx=24, pady=(22, 6), anchor="w")
+        ctk.CTkLabel(
+            dlg, text=f"Sample: {_short_path(path, 58)}",
+            font=ctk.CTkFont(size=11, family="Consolas"),
+            text_color=CLR_MUTED,
+        ).pack(padx=24, pady=(0, 14), anchor="w")
+        ctk.CTkLabel(
+            dlg,
+            text="Walking RAR contents needs `unrar`. Without it the scan "
+                 "still continues — RAR files are hashed, but their contents "
+                 "are not recursed.",
+            font=ctk.CTkFont(size=12), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=460,
+        ).pack(padx=24, pady=(0, 14), anchor="w")
+
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack(padx=24, pady=(0, 20), anchor="e")
+
+        def answer(include: bool):
+            self._rar_decision_value = include
+            self._rar_decision_event.set()
+            dlg.destroy()
+
+        ctk.CTkButton(
+            row, text="Skip RARs", width=120, height=36,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER, text_color=CLR_TEXT,
+            command=lambda: answer(False),
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            row, text="Include contents", width=160, height=36,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H, text_color="white",
+            command=lambda: answer(True),
+        ).pack(side="left")
+
+        dlg.protocol("WM_DELETE_WINDOW", lambda: answer(False))
+
+    # ─────────────────────────────────────────────────────────────────
+    # Results rendering
+    # ─────────────────────────────────────────────────────────────────
+
+    def _clear_results(self) -> None:
+        for w in self._results_body.winfo_children():
+            w.destroy()
+        self._lbl_results_empty = ctk.CTkLabel(
+            self._results_body,
+            text="Results will appear here once the analysis completes.",
+            font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+        )
+        self._lbl_results_empty.pack(anchor="w", pady=16)
+
+    def _render_results(self, findings: Dict[str, Any]) -> None:
+        # Wipe the empty state.
+        for w in self._results_body.winfo_children():
+            w.destroy()
+
+        # Tabbed layout — Overview / Modified / Deleted / Trash / Errors
+        tabs = ctk.CTkTabview(
+            self._results_body, fg_color=CLR_SURFACE_2,
+            segmented_button_fg_color=CLR_SURFACE,
+            segmented_button_selected_color=CLR_ACCENT,
+            segmented_button_selected_hover_color=CLR_ACCENT_H,
+            segmented_button_unselected_color=CLR_SURFACE,
+            segmented_button_unselected_hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT,
+            corner_radius=14,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        tabs.pack(fill="both", expand=True)
+
+        tab_overview = tabs.add("Overview")
+        tab_modified = tabs.add("Modified Files")
+        tab_deleted  = tabs.add("Deleted (Disk Image)")
+        tab_trash    = tabs.add("System Trash")
+        tab_errors   = tabs.add("Errors")
+
+        self._render_overview(tab_overview, findings)
+        self._render_modified(tab_modified, findings)
+        self._render_deleted(tab_deleted, findings)
+        self._render_trash(tab_trash, findings)
+        self._render_errors(tab_errors, findings)
+
+        tabs.set("Overview")
+
+    # ── Overview tab ─────────────────────────────────────────────────────
+    def _render_overview(self, parent, findings: Dict[str, Any]) -> None:
+        summary = findings.get("summary") or {}
+        tsk_list = findings.get("tsk_disk_analyses") or []
+        modified = findings.get("modified_recent") or []
+        trash_items = findings.get("system_trash") or []
+        recovered_total = findings.get("recovered_total") or 0
+
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        # Stat strip
+        strip = ctk.CTkFrame(wrap, fg_color="transparent")
+        strip.pack(fill="x", pady=(0, 14))
+        self._stat_card(strip, "Total Files",
+                        f"{summary.get('total_files', 0):,}")
+        self._stat_card(strip, "Total Size",
+                        _fmt_size(summary.get("total_size_bytes", 0)))
+        self._stat_card(strip, f"Modified ({DEFAULT_MODIFIED_WINDOW_DAYS}d)",
+                        f"{len(modified):,}", accent=CLR_WARN)
+        deleted_n = sum(len(t.get("deleted_files") or []) for t in tsk_list)
+        self._stat_card(strip, "Deleted (Image)",
+                        f"{deleted_n:,}", accent=CLR_DANGER)
+        self._stat_card(strip, "In OS Trash",
+                        f"{len(trash_items):,}", accent=CLR_INFO)
+        self._stat_card(strip, "Recovered",
+                        f"{recovered_total:,}", accent=CLR_SUCCESS)
+
+        # By-type pills
+        by_type = summary.get("by_type") or {}
+        if by_type:
             ctk.CTkLabel(
-                self._case_body,
-                text=f"Disk images sent for Sleuth Kit analysis ({len(disk_cases)})",
-                font=ctk.CTkFont(size=13, weight="bold"),
-                text_color=COLOR_DIM,
-            ).pack(anchor="w", pady=(20, 8))
-
-            for dc in disk_cases:
-                sub = ctk.CTkFrame(self._case_body, fg_color=COLOR_CARD, corner_radius=8)
-                sub.pack(fill="x", pady=(0, 8))
-
-                if "error" in dc:
-                    ctk.CTkLabel(
-                        sub,
-                        text=f"✗  {os.path.basename(dc.get('path', ''))}",
-                        font=ctk.CTkFont(size=12, weight="bold"),
-                        text_color=COLOR_DANGER,
-                    ).pack(anchor="w", padx=12, pady=(10, 0))
-                    ctk.CTkLabel(
-                        sub, text=dc["error"],
-                        font=ctk.CTkFont(size=11), text_color=COLOR_MUTED,
-                        wraplength=620, justify="left",
-                    ).pack(anchor="w", padx=12, pady=(0, 10))
-                    continue
-
-                sub_case_id = dc.get("case_id") or dc.get("job_id", "")
-                # Polished client-facing report (see note above).
-                sub_case_url = f"{url}/case/{sub_case_id}"
-                sub_report_url = f"{url}/report/{sub_case_id}"
-
-                top = ctk.CTkFrame(sub, fg_color="transparent")
-                top.pack(fill="x", padx=12, pady=(10, 2))
+                wrap, text="File types",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=CLR_TEXT_DIM,
+            ).pack(anchor="w", pady=(4, 6))
+            grid = ctk.CTkFrame(wrap, fg_color="transparent")
+            grid.pack(fill="x", pady=(0, 14))
+            pill_colors = {
+                "image": "#60a5fa", "pdf": "#ef4444", "docx": "#3b82f6",
+                "text": "#10b981", "archive_zip": "#a855f7",
+                "archive_rar": "#f59e0b", "disk_image": "#f97316",
+                "browser_db": "#ec4899", "video": "#22d3ee",
+                "other": CLR_MUTED,
+            }
+            for t, n in sorted(by_type.items(), key=lambda x: -x[1]):
+                color = pill_colors.get(t, CLR_MUTED)
+                pill = ctk.CTkFrame(grid, fg_color=CLR_SURFACE, corner_radius=8)
+                pill.pack(side="left", padx=(0, 8), pady=(0, 8))
+                row = ctk.CTkFrame(pill, fg_color="transparent")
+                row.pack(padx=12, pady=6)
                 ctk.CTkLabel(
-                    top,
-                    text=f"💿  {os.path.basename(dc.get('path', ''))}",
-                    font=ctk.CTkFont(size=12, weight="bold"),
-                    text_color=COLOR_TEXT,
+                    row, text=t.replace("_", " "),
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=color,
                 ).pack(side="left")
                 ctk.CTkLabel(
-                    top,
-                    text=f"  case {sub_case_id}",
-                    font=ctk.CTkFont(size=11, family="monospace"),
-                    text_color=COLOR_ACCENT,
-                ).pack(side="left")
-                ctk.CTkLabel(
-                    top,
-                    text=f"  · {dc.get('status', 'queued')}",
-                    font=ctk.CTkFont(size=11),
-                    text_color=COLOR_WARN,
-                ).pack(side="left")
+                    row, text=f"{n:,}",
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    text_color=CLR_TEXT,
+                ).pack(side="left", padx=(8, 0))
 
-                btns = ctk.CTkFrame(sub, fg_color="transparent")
-                btns.pack(fill="x", padx=12, pady=(2, 10))
+        # Disk-image callout
+        if tsk_list:
+            callout = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE, corner_radius=10)
+            callout.pack(fill="x", pady=(4, 0))
+            ctk.CTkLabel(
+                callout, text="Sleuth Kit ran on the following disk image(s):",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=CLR_WARN,
+            ).pack(anchor="w", padx=16, pady=(12, 4))
+            for t in tsk_list:
+                if t.get("error"):
+                    line = f"✗  {Path(t.get('image', '')).name}  —  {t['error'][:120]}"
+                    color = CLR_DANGER
+                else:
+                    fs = (t.get("fsstat") or {}).get("fs_type", "?")
+                    line = (f"✓  {t.get('image_name', '')}  —  "
+                            f"{len(t.get('partitions') or [])} partition(s), "
+                            f"fs={fs}, "
+                            f"{len(t.get('deleted_files') or []):,} deleted, "
+                            f"{t.get('recovered_count', 0):,} recovered")
+                    color = CLR_SUCCESS
+                ctk.CTkLabel(
+                    callout, text=line,
+                    font=ctk.CTkFont(size=11, family="Consolas"),
+                    text_color=color, anchor="w", justify="left",
+                    wraplength=780,
+                ).pack(anchor="w", padx=16, pady=(0, 2))
+            ctk.CTkLabel(callout, text=" ",
+                         font=ctk.CTkFont(size=4)).pack()
+
+    # ── Modified Files tab ──────────────────────────────────────────────
+    def _render_modified(self, parent, findings: Dict[str, Any]) -> None:
+        modified = findings.get("modified_recent") or []
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        ctk.CTkLabel(
+            wrap,
+            text=f"Files modified in the last {DEFAULT_MODIFIED_WINDOW_DAYS} days "
+                 f"({len(modified):,})",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            wrap,
+            text="Sorted newest first. Shows the modification (mtime) timestamp, "
+                 "size, and type of each file.",
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w", pady=(0, 12))
+
+        if not modified:
+            ctk.CTkLabel(
+                wrap, text="No files modified in the selected window.",
+                font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+            ).pack(anchor="w", pady=16)
+            return
+
+        # Header row
+        hdr = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE, corner_radius=6)
+        hdr.pack(fill="x")
+        for txt, w_, anchor in (
+            ("Modified", 150, "w"),
+            ("Type", 90, "w"),
+            ("Size", 90, "e"),
+            ("File", 520, "w"),
+        ):
+            ctk.CTkLabel(
+                hdr, text=txt.upper(), width=w_, anchor=anchor,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=CLR_MUTED,
+            ).pack(side="left", padx=(12 if anchor == "w" else 0, 12), pady=8)
+
+        # Data rows inside a scrollable box
+        body = ctk.CTkScrollableFrame(
+            wrap, fg_color=CLR_SURFACE, height=320,
+            scrollbar_button_color=CLR_DIVIDER,
+            corner_radius=6,
+        )
+        body.pack(fill="both", expand=True, pady=(1, 0))
+
+        max_rows = 500
+        for entry in modified[:max_rows]:
+            row = ctk.CTkFrame(body, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=0)
+            ctk.CTkLabel(
+                row, text=_fmt_ts(entry.get("mtime")),
+                width=150, anchor="w",
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_WARN,
+            ).pack(side="left", padx=(12, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=(entry.get("type") or "").replace("_", " "),
+                width=90, anchor="w",
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            ).pack(side="left", padx=(0, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=_fmt_size(entry.get("size") or 0),
+                width=90, anchor="e",
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            ).pack(side="left", padx=(0, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=_short_path(entry.get("path") or entry.get("name") or "", 82),
+                anchor="w", font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_TEXT, justify="left",
+            ).pack(side="left", padx=(0, 12), pady=4, fill="x", expand=True)
+
+        if len(modified) > max_rows:
+            ctk.CTkLabel(
+                wrap,
+                text=f"… and {len(modified) - max_rows:,} more. "
+                     f"Full list is in the findings JSON.",
+                font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+            ).pack(anchor="w", pady=(8, 0))
+
+    # ── Deleted Files tab ───────────────────────────────────────────────
+    def _render_deleted(self, parent, findings: Dict[str, Any]) -> None:
+        tsk_list = findings.get("tsk_disk_analyses") or []
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        if not tsk_list:
+            ctk.CTkLabel(
+                wrap,
+                text=("No disk images were found inside the selected folder, "
+                      "so there were no deletions to recover."
+                      if not findings.get("recover_deleted_requested", True)
+                      else "No disk images were found inside the selected folder. "
+                           "Drop a .dd / .e01 / .raw / .img file into the folder "
+                           "and re-run to recover deleted files from it."),
+                font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+                wraplength=720, justify="left",
+            ).pack(anchor="w", pady=16)
+            return
+
+        for t in tsk_list:
+            self._render_tsk_block(wrap, t)
+
+    def _render_tsk_block(self, parent, t: Dict[str, Any]) -> None:
+        block = ctk.CTkFrame(parent, fg_color=CLR_SURFACE, corner_radius=10)
+        block.pack(fill="x", pady=(0, 12))
+
+        title = ctk.CTkFrame(block, fg_color="transparent")
+        title.pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(
+            title, text=f"💿  {t.get('image_name') or Path(t.get('image', '')).name}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            title, text=f"   {t.get('image', '')}",
+            font=ctk.CTkFont(size=10, family="Consolas"),
+            text_color=CLR_MUTED,
+        ).pack(side="left")
+
+        if t.get("error"):
+            ctk.CTkLabel(
+                block, text=f"✗ {t['error'][:400]}",
+                font=ctk.CTkFont(size=11), text_color=CLR_DANGER,
+                wraplength=820, justify="left",
+            ).pack(anchor="w", padx=16, pady=(0, 14))
+            return
+
+        # Quick stats
+        fs = t.get("fsstat") or {}
+        parts = t.get("partitions") or []
+        deleted = t.get("deleted_files") or []
+        stats = ctk.CTkFrame(block, fg_color="transparent")
+        stats.pack(fill="x", padx=16, pady=(4, 8))
+        for label, value, color in (
+            ("Filesystem", fs.get("fs_type", "—") or "—", CLR_ACCENT),
+            ("Partitions", str(len(parts)), CLR_TEXT),
+            ("Deleted", f"{len(deleted):,}", CLR_WARN),
+            ("Recovered", f"{t.get('recovered_count', 0):,}", CLR_SUCCESS),
+        ):
+            chip = ctk.CTkFrame(stats, fg_color=CLR_ELEVATED, corner_radius=8)
+            chip.pack(side="left", padx=(0, 8))
+            ctk.CTkLabel(
+                chip, text=label, font=ctk.CTkFont(size=10),
+                text_color=CLR_MUTED,
+            ).pack(anchor="w", padx=12, pady=(8, 0))
+            ctk.CTkLabel(
+                chip, text=value,
+                font=ctk.CTkFont(size=15, weight="bold"),
+                text_color=color,
+            ).pack(anchor="w", padx=12, pady=(0, 8))
+
+        # Recovery folder + open button
+        recovery = t.get("recovery_path")
+        if recovery:
+            rec_row = ctk.CTkFrame(block, fg_color="transparent")
+            rec_row.pack(fill="x", padx=16, pady=(4, 0))
+            ctk.CTkLabel(
+                rec_row,
+                text=f"📂  Recovered files in: {recovery}",
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_ACCENT, anchor="w", justify="left",
+                wraplength=620,
+            ).pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(
+                rec_row, text="Open Folder", height=30, width=120,
+                fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H, text_color="white",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=lambda r=recovery: _open_in_file_manager(r),
+            ).pack(side="right")
+
+        # Deleted-files listing
+        if deleted:
+            recovered_names = {
+                (r.get("name") or "").lower()
+                for r in (t.get("recovered_files") or [])
+            }
+            ctk.CTkLabel(
+                block,
+                text=f"Deleted files ({len(deleted):,}):",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=CLR_TEXT_DIM,
+            ).pack(anchor="w", padx=16, pady=(12, 4))
+            tbx = ctk.CTkTextbox(
+                block, height=200, fg_color=CLR_BG,
+                text_color=CLR_TEXT, font=ctk.CTkFont(size=11, family="Consolas"),
+                wrap="none",
+            )
+            tbx.pack(fill="x", padx=16, pady=(0, 8))
+            max_rows = 300
+            for entry in deleted[:max_rows]:
+                inode = str(entry.get("inode") or "?")
+                name = entry.get("name") or "(unnamed)"
+                base = name.rsplit("/", 1)[-1].lower()
+                mark = "✓" if base in recovered_names else "·"
+                tbx.insert("end", f"{mark}  {inode:>14}  {name}\n")
+            if len(deleted) > max_rows:
+                tbx.insert("end", f"\n… and {len(deleted) - max_rows:,} more.\n")
+            tbx.configure(state="disabled")
+            ctk.CTkLabel(
+                block,
+                text="✓  carved bytes on disk      ·  metadata only",
+                font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+            ).pack(anchor="w", padx=16, pady=(0, 14))
+
+    # ── System Trash tab ────────────────────────────────────────────────
+    def _render_trash(self, parent, findings: Dict[str, Any]) -> None:
+        """
+        Render the OS-level Trash / Recycle Bin enumeration. Each item shows
+        its original path (where Windows preserves it via the `$I` sidecar),
+        the deletion timestamp, and a hover-friendly source tag.
+        """
+        items = findings.get("system_trash") or []
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        sysname = platform.system()
+        trash_label = {
+            "Darwin":  "macOS Trash (~/.Trash)",
+            "Windows": "Windows Recycle Bin ($Recycle.Bin on each drive)",
+            "Linux":   "Linux XDG Trash (~/.local/share/Trash)",
+        }.get(sysname, "System Trash")
+
+        # Header
+        ctk.CTkLabel(
+            wrap,
+            text=f"{trash_label} — {len(items):,} item{'s' if len(items) != 1 else ''}",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            wrap,
+            text="Files the user moved to Trash but never emptied. Use the "
+                 "OS file manager to drag them back to their original "
+                 "location. Sorted newest deletion first.",
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=820,
+        ).pack(anchor="w", pady=(0, 12))
+
+        if not items:
+            empty = ctk.CTkFrame(
+                wrap, fg_color=CLR_SURFACE, corner_radius=10,
+            )
+            empty.pack(fill="x", pady=(8, 0))
+            ctk.CTkLabel(
+                empty,
+                text="The system trash is empty — nothing to recover here.",
+                font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+            ).pack(anchor="w", padx=18, pady=18)
+            # Quick-action: open the trash folder anyway so the investigator
+            # can confirm directly in the file manager.
+            trash_path = self._guess_trash_path()
+            if trash_path:
                 ctk.CTkButton(
-                    btns, text="Open in Browser", height=30, width=140,
-                    fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
-                    text_color="white", font=ctk.CTkFont(size=11, weight="bold"),
-                    command=lambda u=sub_case_url: webbrowser.open(u),
-                ).pack(side="left", padx=(0, 6))
-                ctk.CTkButton(
-                    btns, text="Download PDF", height=30, width=120,
-                    fg_color=COLOR_BG, hover_color=COLOR_PANEL,
-                    text_color=COLOR_TEXT, font=ctk.CTkFont(size=11, weight="bold"),
-                    command=lambda u=sub_report_url: webbrowser.open(u),
-                ).pack(side="left")
+                    empty, text=f"Open {trash_label.split(' (')[0]}",
+                    height=32, width=240,
+                    fg_color=CLR_SURFACE_2, hover_color=CLR_DIVIDER,
+                    text_color=CLR_TEXT,
+                    font=ctk.CTkFont(size=11, weight="bold"),
+                    command=lambda p=trash_path: _open_in_file_manager(p),
+                ).pack(anchor="w", padx=18, pady=(0, 18))
+            return
+
+        # Action row — open trash + summary chip
+        action_row = ctk.CTkFrame(wrap, fg_color="transparent")
+        action_row.pack(fill="x", pady=(0, 10))
+        total_size = sum(int(i.get("size") or 0) for i in items)
+        chip = ctk.CTkLabel(
+            action_row,
+            text=f"  {len(items):,} items   ·   {_fmt_size(total_size)} total  ",
+            fg_color=CLR_ACCENT_SOFT, text_color=CLR_ACCENT,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=999, padx=14, pady=4,
+        )
+        chip.pack(side="left")
+        trash_path = self._guess_trash_path()
+        if trash_path:
+            ctk.CTkButton(
+                action_row, text=f"Open {trash_label.split(' (')[0]}",
+                height=32, width=220,
+                fg_color=CLR_SURFACE, hover_color=CLR_DIVIDER, text_color=CLR_TEXT,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=lambda p=trash_path: _open_in_file_manager(p),
+            ).pack(side="right")
+
+        # Header row
+        hdr = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE, corner_radius=6)
+        hdr.pack(fill="x")
+        for txt, w_, anchor in (
+            ("Deleted", 150, "w"),
+            ("Size", 90, "e"),
+            ("Source", 170, "w"),
+            ("Original / current path", 540, "w"),
+        ):
+            ctk.CTkLabel(
+                hdr, text=txt.upper(), width=w_, anchor=anchor,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=CLR_MUTED,
+            ).pack(side="left", padx=(12 if anchor == "w" else 0, 12), pady=8)
+
+        # Data rows
+        body = ctk.CTkScrollableFrame(
+            wrap, fg_color=CLR_SURFACE, height=320,
+            scrollbar_button_color=CLR_DIVIDER, corner_radius=6,
+        )
+        body.pack(fill="both", expand=True, pady=(1, 0))
+
+        max_rows = 400
+        for entry in items[:max_rows]:
+            row = ctk.CTkFrame(body, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=0)
 
             ctk.CTkLabel(
-                self._case_body,
-                text="Sleuth Kit runs asynchronously on the backend — "
-                     "refresh the case page in a minute or two if analysis "
-                     "is still queued.",
-                font=ctk.CTkFont(size=10), text_color=COLOR_MUTED,
-                wraplength=640, justify="left",
-            ).pack(anchor="w", pady=(6, 0))
+                row, text=_fmt_ts(entry.get("deleted_at")),
+                width=150, anchor="w",
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_INFO,
+            ).pack(side="left", padx=(12, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=_fmt_size(entry.get("size") or 0),
+                width=90, anchor="e",
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            ).pack(side="left", padx=(0, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=entry.get("source", "—"),
+                width=170, anchor="w",
+                font=ctk.CTkFont(size=11), text_color=CLR_MUTED,
+            ).pack(side="left", padx=(0, 12), pady=4)
+            display = (
+                entry.get("original_path")
+                or entry.get("path")
+                or entry.get("name") or ""
+            )
+            ctk.CTkLabel(
+                row, text=_short_path(display, 90),
+                anchor="w", font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_TEXT, justify="left",
+            ).pack(side="left", padx=(0, 12), pady=4, fill="x", expand=True)
+
+        if len(items) > max_rows:
+            ctk.CTkLabel(
+                wrap,
+                text=f"… and {len(items) - max_rows:,} more. "
+                     f"Full list is in the findings JSON.",
+                font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+            ).pack(anchor="w", pady=(8, 0))
+
+    def _guess_trash_path(self) -> Optional[str]:
+        """Best-effort path to the OS trash so we can open it in Finder/Explorer."""
+        sysname = platform.system()
+        if sysname == "Darwin":
+            p = Path.home() / ".Trash"
+            return str(p) if p.exists() else None
+        if sysname == "Linux":
+            p = Path.home() / ".local" / "share" / "Trash" / "files"
+            return str(p) if p.exists() else None
+        if sysname == "Windows":
+            # The Recycle Bin is a virtual shell folder; opening
+            # "shell:RecycleBinFolder" works via explorer.exe.
+            try:
+                subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])
+                return None  # already opened inline
+            except Exception:
+                return None
+        return None
+
+    # ── Errors tab ──────────────────────────────────────────────────────
+    def _render_errors(self, parent, findings: Dict[str, Any]) -> None:
+        errs = findings.get("errors") or []
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        if not errs:
+            ctk.CTkLabel(
+                wrap,
+                text="No errors. The analysis completed cleanly.",
+                font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
+            ).pack(anchor="w", pady=16)
+            return
+
+        ctk.CTkLabel(
+            wrap, text=f"{len(errs):,} file(s) failed to process:",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=CLR_DANGER,
+        ).pack(anchor="w", pady=(0, 10))
+
+        tbx = ctk.CTkTextbox(
+            wrap, fg_color=CLR_SURFACE,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11, family="Consolas"),
+            wrap="word",
+        )
+        tbx.pack(fill="both", expand=True)
+        for err in errs:
+            if isinstance(err, dict):
+                path = err.get("path", "")
+                reason = err.get("error") or err.get("reason") or err.get("message", "")
+                tbx.insert("end", f"• {path}\n    {reason}\n\n")
+            else:
+                tbx.insert("end", f"• {err}\n\n")
+        tbx.configure(state="disabled")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
