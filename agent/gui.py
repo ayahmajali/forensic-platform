@@ -130,6 +130,19 @@ def _load_tsk_runner():
     raise RuntimeError(f"Could not import tsk_runner module: {last_exc}")
 
 
+def _load_recovery():
+    """Same fallback pattern, for agent/recovery.py (PhotoRec wrapper).
+    Returns the imported module — callers handle ``None`` gracefully if
+    the module is missing (very old agent build)."""
+    last_exc = None
+    for modname in ("recovery", "agent.recovery"):
+        try:
+            return __import__(modname, fromlist=["*"])
+        except ImportError as e:
+            last_exc = e
+    raise RuntimeError(f"Could not import recovery module: {last_exc}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Formatting helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -465,6 +478,10 @@ class ForensicAgentApp(ctk.CTk):
         self._include_browsers = ctk.BooleanVar(value=False)
         self._recover_deleted = ctk.BooleanVar(value=True)
         self._upload_evidence = ctk.BooleanVar(value=False)
+        # Deep recovery uses PhotoRec on the raw block device. It is OFF by
+        # default because (a) it is slow and (b) it pops a system admin
+        # prompt (Touch ID / UAC / PolicyKit). The investigator opts in.
+        self._deep_recover = ctk.BooleanVar(value=False)
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -761,6 +778,51 @@ class ForensicAgentApp(ctk.CTk):
                    "and Arc history databases. Off by default for privacy.",
             variable=self._include_browsers,
         )
+
+        # ── Deep recovery (PhotoRec) — wide, full-width row ────────────────
+        # Distinct from "Recover deleted files" above: this one operates on
+        # the *raw block device* backing the folder, so it can recover files
+        # that were deleted AND emptied from the Recycle Bin. It needs admin
+        # rights — we'll pop the native OS prompt (Touch ID on Mac, UAC on
+        # Windows, PolicyKit on Linux), no terminal/sudo required.
+        deep_card = ctk.CTkFrame(
+            opts, fg_color=CLR_SURFACE_2, corner_radius=10,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        deep_card.grid(row=1, column=0, columnspan=2,
+                       sticky="ew", pady=(12, 0))
+        head = ctk.CTkFrame(deep_card, fg_color="transparent")
+        head.pack(fill="x", padx=18, pady=(14, 4))
+        ctk.CTkCheckBox(
+            head, text="Deep recover (PhotoRec, raw-disk carving)",
+            variable=self._deep_recover,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=CLR_TEXT,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            checkbox_width=20, checkbox_height=20,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head, text="ADMIN REQUIRED",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            text_color=CLR_WARN, fg_color=CLR_ELEVATED,
+            corner_radius=999, padx=8, pady=2,
+        ).pack(side="left", padx=(12, 0))
+        ctk.CTkLabel(
+            deep_card,
+            text=(
+                "Reads the raw block device backing the selected folder and "
+                "carves deleted files by signature — recovers files even "
+                "after the Recycle Bin / Trash has been emptied. The system "
+                "will prompt you for your password (Touch ID on Mac, UAC on "
+                "Windows). Recovered files are written to "
+                "~/Desktop/TheDeletedFiles/PhotoRec-<timestamp>/.\n\n"
+                "Note: on modern SSDs (M-series Macs, most NVMe laptops), "
+                "TRIM may have already physically zeroed deleted blocks — "
+                "the tool will warn you when this is the case."
+            ),
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=820,
+        ).pack(anchor="w", padx=18, pady=(0, 16))
 
     def _option_row(self, parent, *, row: int, column: int,
                     title: str, detail: str, variable) -> None:
@@ -1077,6 +1139,7 @@ class ForensicAgentApp(ctk.CTk):
                 self._selected_folder,
                 bool(self._include_browsers.get()),
                 bool(self._recover_deleted.get()),
+                bool(self._deep_recover.get()),
             ),
             daemon=True,
         )
@@ -1134,7 +1197,7 @@ class ForensicAgentApp(ctk.CTk):
     # ─────────────────────────────────────────────────────────────────
 
     def _scan_worker(self, root: Path, include_browsers: bool,
-                     recover_deleted: bool) -> None:
+                     recover_deleted: bool, deep_recover: bool = False) -> None:
         """
         Main analysis pipeline. Runs entirely on a background thread.
 
@@ -1142,6 +1205,11 @@ class ForensicAgentApp(ctk.CTk):
         Phase 2: auto-detect disk images inside the folder and run TSK on
                  each one if the investigator opted into recovery.
         Phase 3: compute 'recently modified' file list for the summary tab.
+        Phase 4: enumerate the system Trash / Recycle Bin.
+        Phase 5: (opt-in) deep recovery via PhotoRec on the raw block
+                 device backing the folder — recovers files that were
+                 deleted AND emptied from the trash. Pops a native OS
+                 admin prompt because raw-device reads need root / UAC.
         """
         try:
             scanner = _load_scanner()
@@ -1212,6 +1280,8 @@ class ForensicAgentApp(ctk.CTk):
 
         findings["tsk_disk_analyses"] = tsk_results
         findings["recovered_total"] = recovered_total
+        findings["recover_deleted_requested"] = recover_deleted
+        findings["deep_recover_requested"] = deep_recover
 
         # ── Phase 3: recently-modified list ──────────────────────────
         findings["modified_recent"] = self._extract_modified(
@@ -1235,6 +1305,52 @@ class ForensicAgentApp(ctk.CTk):
                 "path": "<system trash>",
                 "error": f"trash enumeration failed: {e}",
             })
+
+        # ── Phase 5: deep recovery on the raw block device (opt-in) ───
+        # This is the answer to "I emptied the Recycle Bin and the tool
+        # showed nothing." PhotoRec ignores the filesystem entirely and
+        # carves files out of free space by signature. It needs root /
+        # UAC, which we get via the native OS prompt (Touch ID / UAC /
+        # PolicyKit) — no terminal sudo required.
+        deep_recovery: Dict[str, Any] = {"status": "skipped", "error": ""}
+        if deep_recover:
+            try:
+                self._q.put(("disk_log", {
+                    "text": "Phase 5 — deep recovery via PhotoRec…",
+                }))
+                self._q.put(("disk_log", {
+                    "text": "(You may see a system password / UAC prompt.)",
+                }))
+                rec_mod = _load_recovery()
+
+                def _rec_log(line: str) -> None:
+                    # Stream PhotoRec output into the activity line.
+                    self._q.put(("disk_log", {"text": line}))
+
+                deep_recovery = rec_mod.recover_for_folder(
+                    root, on_log=_rec_log, elevate=True,
+                )
+                # Bonus: feed the recovered count into the top counter so
+                # the headline number reflects PhotoRec's contribution too.
+                if isinstance(deep_recovery, dict):
+                    rc = int(deep_recovery.get("recovered_count") or 0)
+                    findings["recovered_total"] = (
+                        int(findings.get("recovered_total") or 0) + rc
+                    )
+            except Exception as e:
+                import traceback
+                deep_recovery = {
+                    "status": "error",
+                    "error": f"{e}\n\n{traceback.format_exc()}",
+                    "recovered_files": [],
+                    "recovered_count": 0,
+                }
+                findings.setdefault("errors", []).append({
+                    "path": "<deep recovery>",
+                    "error": f"PhotoRec phase failed: {e}",
+                })
+
+        findings["deep_recovery"] = deep_recovery
 
         self._q.put(("scan_done", {"findings": findings}))
 
@@ -1464,9 +1580,21 @@ class ForensicAgentApp(ctk.CTk):
         trash_banner = (
             f"  ·  {len(trash_items):,} in OS trash" if trash_items else ""
         )
+        deep = findings.get("deep_recovery") or {}
+        deep_banner = ""
+        if findings.get("deep_recover_requested"):
+            n = int(deep.get("recovered_count") or 0)
+            if deep.get("status") == "ok":
+                deep_banner = f"  ·  PhotoRec recovered {n:,} files"
+            elif deep.get("status") == "no_tool":
+                deep_banner = "  ·  PhotoRec not installed"
+            elif deep.get("trim", {}).get("trim_likely"):
+                deep_banner = "  ·  PhotoRec skipped (TRIM)"
+            else:
+                deep_banner = f"  ·  PhotoRec: {deep.get('status', 'error')}"
         self._lbl_run_status.configure(
             text=f"✓ Analysis complete — {total_files:,} files processed"
-                 f"{tsk_banner}{trash_banner}.",
+                 f"{tsk_banner}{trash_banner}{deep_banner}.",
             text_color=CLR_SUCCESS,
         )
         self._lbl_current.configure(text=" ")
@@ -1643,12 +1771,14 @@ class ForensicAgentApp(ctk.CTk):
         tab_modified = tabs.add("Modified Files")
         tab_deleted  = tabs.add("Deleted (Disk Image)")
         tab_trash    = tabs.add("System Trash")
+        tab_recover  = tabs.add("Deep Recovery")
         tab_errors   = tabs.add("Errors")
 
         self._render_overview(tab_overview, findings)
         self._render_modified(tab_modified, findings)
         self._render_deleted(tab_deleted, findings)
         self._render_trash(tab_trash, findings)
+        self._render_deep_recovery(tab_recover, findings)
         self._render_errors(tab_errors, findings)
 
         tabs.set("Overview")
@@ -2008,7 +2138,7 @@ class ForensicAgentApp(ctk.CTk):
                     fg_color=CLR_SURFACE_2, hover_color=CLR_DIVIDER,
                     text_color=CLR_TEXT,
                     font=ctk.CTkFont(size=11, weight="bold"),
-                    command=lambda p=trash_path: _open_in_file_manager(p),
+                    command=lambda p=trash_path: self._open_trash(p),
                 ).pack(anchor="w", padx=18, pady=(0, 18))
             return
 
@@ -2097,7 +2227,13 @@ class ForensicAgentApp(ctk.CTk):
             ).pack(anchor="w", pady=(8, 0))
 
     def _guess_trash_path(self) -> Optional[str]:
-        """Best-effort path to the OS trash so we can open it in Finder/Explorer."""
+        """
+        Best-effort *path* to the OS trash so a click handler can open it.
+        MUST be side-effect free — never opens windows by itself. The
+        previous version popped explorer.exe during render, which is the
+        bug Basil reported (the tool opened the empty Recycle Bin during
+        analysis instead of recovering files).
+        """
         sysname = platform.system()
         if sysname == "Darwin":
             p = Path.home() / ".Trash"
@@ -2106,14 +2242,221 @@ class ForensicAgentApp(ctk.CTk):
             p = Path.home() / ".local" / "share" / "Trash" / "files"
             return str(p) if p.exists() else None
         if sysname == "Windows":
-            # The Recycle Bin is a virtual shell folder; opening
-            # "shell:RecycleBinFolder" works via explorer.exe.
-            try:
-                subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])
-                return None  # already opened inline
-            except Exception:
-                return None
+            # Sentinel string — handled in _open_trash() via the shell
+            # virtual folder, never auto-opened during render.
+            return "shell:RecycleBinFolder"
         return None
+
+    def _open_trash(self, target: Optional[str]) -> None:
+        """Click-handler for the 'Open Trash / Recycle Bin' buttons."""
+        if not target:
+            return
+        try:
+            if target == "shell:RecycleBinFolder":
+                subprocess.Popen(["explorer.exe", "shell:RecycleBinFolder"])
+            else:
+                _open_in_file_manager(target)
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, f"Could not open trash:\n{e}")
+
+    # ── Deep Recovery tab (PhotoRec) ────────────────────────────────────
+    def _render_deep_recovery(self, parent, findings: Dict[str, Any]) -> None:
+        """
+        Show what PhotoRec found when run against the raw block device
+        backing the selected folder. Three states matter:
+
+          • toggle was OFF  → explain how to turn it on
+          • toggle was ON, TRIM blocked us → explain the physical limit
+            so the investigator understands "0 recovered" isn't a bug
+          • toggle was ON, files came back → list them with sizes + a
+            button to reveal them in Finder / Explorer
+        """
+        wrap = ctk.CTkFrame(parent, fg_color="transparent")
+        wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        deep = findings.get("deep_recovery") or {}
+        requested = bool(findings.get("deep_recover_requested"))
+
+        # ── State 1: investigator didn't opt in ─────────────────────────
+        if not requested:
+            ctk.CTkLabel(
+                wrap, text="Deep recovery was not requested for this scan.",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=CLR_TEXT,
+            ).pack(anchor="w", pady=(0, 6))
+            ctk.CTkLabel(
+                wrap,
+                text=(
+                    "To recover files that were deleted AND emptied from the "
+                    "Recycle Bin / Trash, tick the “Deep recover (PhotoRec)” "
+                    "option on the Evidence Source card and re-run the scan. "
+                    "The system will prompt you for your password when the "
+                    "raw-disk read begins."
+                ),
+                font=ctk.CTkFont(size=12), text_color=CLR_TEXT_DIM,
+                justify="left", wraplength=820,
+            ).pack(anchor="w")
+            return
+
+        status = deep.get("status") or "unknown"
+        trim   = deep.get("trim") or {}
+        files  = deep.get("recovered_files") or []
+        out_dir = deep.get("output_dir")
+        device  = deep.get("device")
+        err = deep.get("error") or ""
+
+        # ── Status header ───────────────────────────────────────────────
+        status_color = {
+            "ok":           CLR_SUCCESS,
+            "no_tool":      CLR_WARN,
+            "no_device":    CLR_WARN,
+            "needs_admin":  CLR_WARN,
+            "skipped_trim": CLR_WARN,
+            "error":        CLR_DANGER,
+        }.get(status, CLR_MUTED)
+        status_label = {
+            "ok":           "✓  PhotoRec completed",
+            "no_tool":      "⚠  PhotoRec is not installed",
+            "no_device":    "⚠  Could not resolve the disk device",
+            "needs_admin":  "⚠  Elevated privileges required",
+            "skipped_trim": "⚠  Skipped — TRIM has zeroed deleted blocks",
+            "error":        "✗  PhotoRec failed",
+        }.get(status, status)
+
+        ctk.CTkLabel(
+            wrap, text=status_label,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            text_color=status_color,
+        ).pack(anchor="w", pady=(0, 8))
+
+        # ── Device + count summary ──────────────────────────────────────
+        meta = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE, corner_radius=8)
+        meta.pack(fill="x", pady=(0, 12))
+        for label, value in (
+            ("Device", device or "—"),
+            ("Output folder", out_dir or "—"),
+            ("Files recovered", f"{len(files):,}"),
+            ("Filesystem", str(trim.get("filesystem") or "—")),
+            ("Media type", str(trim.get("media") or "—")),
+            ("TRIM likely",
+             "yes — recovery may be impossible" if trim.get("trim_likely")
+             else "no"),
+        ):
+            row = ctk.CTkFrame(meta, fg_color="transparent")
+            row.pack(fill="x", padx=14, pady=2)
+            ctk.CTkLabel(
+                row, text=label.upper(), width=140, anchor="w",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=CLR_MUTED,
+            ).pack(side="left", pady=4)
+            ctk.CTkLabel(
+                row, text=str(value), anchor="w",
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_TEXT, justify="left", wraplength=620,
+            ).pack(side="left", padx=(8, 0), pady=4, fill="x", expand=True)
+
+        # ── TRIM warning, prominent so it isn't missed ──────────────────
+        if trim.get("trim_likely") and trim.get("explanation"):
+            warn = ctk.CTkFrame(
+                wrap, fg_color=CLR_ELEVATED, corner_radius=10,
+                border_color=CLR_WARN, border_width=1,
+            )
+            warn.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(
+                warn, text="⚠  Why “0 recovered” may be expected here",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=CLR_WARN,
+            ).pack(anchor="w", padx=14, pady=(12, 4))
+            ctk.CTkLabel(
+                warn, text=trim["explanation"],
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+                justify="left", wraplength=820,
+            ).pack(anchor="w", padx=14, pady=(0, 12))
+
+        # ── Error / install hint ────────────────────────────────────────
+        if err:
+            box = ctk.CTkFrame(
+                wrap, fg_color=CLR_ELEVATED, corner_radius=10,
+                border_color=CLR_DANGER, border_width=1,
+            )
+            box.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(
+                box, text="Tool message",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=CLR_DANGER,
+            ).pack(anchor="w", padx=14, pady=(12, 4))
+            ctk.CTkLabel(
+                box, text=err,
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_TEXT_DIM, justify="left", wraplength=820,
+            ).pack(anchor="w", padx=14, pady=(0, 12))
+
+        # ── Open output folder shortcut ─────────────────────────────────
+        if out_dir and Path(out_dir).is_dir():
+            btn_row = ctk.CTkFrame(wrap, fg_color="transparent")
+            btn_row.pack(fill="x", pady=(0, 12))
+            ctk.CTkButton(
+                btn_row, text="Open recovered-files folder",
+                fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+                text_color="white", height=36, corner_radius=10,
+                command=lambda: _open_in_file_manager(out_dir),
+            ).pack(side="left")
+
+        # ── File listing ────────────────────────────────────────────────
+        if not files:
+            return
+
+        ctk.CTkLabel(
+            wrap, text=f"Recovered files ({len(files):,})",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=CLR_TEXT,
+        ).pack(anchor="w", pady=(8, 6))
+
+        hdr = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE, corner_radius=6)
+        hdr.pack(fill="x")
+        for txt, w_, anchor in (
+            ("Name", 220, "w"),
+            ("Size", 100, "e"),
+            ("Path", 480, "w"),
+        ):
+            ctk.CTkLabel(
+                hdr, text=txt.upper(), width=w_, anchor=anchor,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=CLR_MUTED,
+            ).pack(side="left", padx=(12 if anchor == "w" else 0, 12), pady=8)
+
+        body = ctk.CTkScrollableFrame(
+            wrap, fg_color=CLR_SURFACE, height=300,
+            scrollbar_button_color=CLR_DIVIDER, corner_radius=6,
+        )
+        body.pack(fill="both", expand=True, pady=(1, 0))
+
+        max_rows = 500
+        for f in files[:max_rows]:
+            row = ctk.CTkFrame(body, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=0)
+            ctk.CTkLabel(
+                row, text=f.get("name", ""), width=220, anchor="w",
+                font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_SUCCESS,
+            ).pack(side="left", padx=(12, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=_fmt_size(f.get("size") or 0),
+                width=100, anchor="e",
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            ).pack(side="left", padx=(0, 12), pady=4)
+            ctk.CTkLabel(
+                row, text=_short_path(f.get("path") or "", 78),
+                anchor="w", font=ctk.CTkFont(size=11, family="Consolas"),
+                text_color=CLR_TEXT, justify="left",
+            ).pack(side="left", padx=(0, 12), pady=4, fill="x", expand=True)
+
+        if len(files) > max_rows:
+            ctk.CTkLabel(
+                wrap,
+                text=f"… and {len(files) - max_rows:,} more in {out_dir}.",
+                font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+            ).pack(anchor="w", pady=(8, 0))
 
     # ── Errors tab ──────────────────────────────────────────────────────
     def _render_errors(self, parent, findings: Dict[str, Any]) -> None:

@@ -22,6 +22,14 @@ REM     Download from https://www.sleuthkit.org/sleuthkit/download.php
 REM     and unzip the bin\*.exe + *.dll files into agent\vendor\tsk\.
 REM     If the folder is empty the build still succeeds, but disk-image
 REM     analysis will be disabled at runtime.
+REM
+REM Optional (needed for the "Deep Recover" feature):
+REM   - PhotoRec Windows binary (photorec_win.exe + companion DLLs)
+REM     dropped into agent\vendor\testdisk\.
+REM     Download from https://www.cgsecurity.org/wiki/TestDisk_Download
+REM     and copy photorec_win.exe (and any DLLs it ships with) into
+REM     agent\vendor\testdisk\. If the folder is empty the build still
+REM     succeeds but Deep Recovery will be disabled at runtime.
 
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
@@ -65,13 +73,36 @@ if "!TSK_STATUS!"=="missing" (
   echo  Found Sleuth Kit binaries in vendor\tsk — they will be bundled.
 )
 
+REM --- Pre-flight: vendored PhotoRec binary (optional) -------------------------
+REM Same story as TSK: survivable if missing. If present we bundle it under
+REM a "testdisk/" subdir so recovery.py resolves it from sys._MEIPASS/testdisk/
+REM at runtime.
+set "PHOTOREC_STATUS=present"
+if not exist "vendor\testdisk\photorec_win.exe" set "PHOTOREC_STATUS=missing"
+if "!PHOTOREC_STATUS!"=="missing" (
+  echo.
+  echo [WARN]  No PhotoRec binary found in agent\vendor\testdisk\.
+  echo         The .exe will still build but Deep Recovery ^(raw-disk
+  echo         carving^) will be disabled. To fix: download the portable
+  echo         zip from https://www.cgsecurity.org/wiki/TestDisk_Download
+  echo         and copy photorec_win.exe into agent\vendor\testdisk\.
+  echo.
+) else (
+  echo  Found PhotoRec binary in vendor\testdisk — it will be bundled.
+)
+
 REM Build up --add-binary flags for whatever is actually present so the
-REM build works even if vendor\tsk has only a README today. PyInstaller's
-REM Windows separator between src and dest is ';'.
+REM build works even if vendor\tsk or vendor\testdisk has only a README
+REM today. PyInstaller's Windows separator between src and dest is ';'.
 set "TSK_BIN_ARGS="
 if exist "vendor\tsk" (
   for %%F in (vendor\tsk\*.exe vendor\tsk\*.dll) do (
     set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-binary ^"%%F;tsk^""
+  )
+)
+if exist "vendor\testdisk" (
+  for %%F in (vendor\testdisk\*.exe vendor\testdisk\*.dll) do (
+    set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-binary ^"%%F;testdisk^""
   )
 )
 
@@ -101,6 +132,7 @@ pyinstaller ^
   --collect-submodules customtkinter ^
   --hidden-import scanner ^
   --hidden-import tsk_runner ^
+  --hidden-import recovery ^
   --hidden-import pypdf ^
   --hidden-import docx ^
   --hidden-import rarfile ^
@@ -126,6 +158,7 @@ pyinstaller ^
   --collect-submodules multiprocessing ^
   --hidden-import scanner ^
   --hidden-import tsk_runner ^
+  --hidden-import recovery ^
   --hidden-import pypdf ^
   --hidden-import docx ^
   --hidden-import rarfile ^
@@ -154,7 +187,7 @@ powershell -NoProfile -Command ^
 
 echo  Packing source archive ...
 powershell -NoProfile -Command ^
-  "Compress-Archive -Force -Path ../agent/forensic_agent.py, ../agent/forensic_agent_gui.py, ../agent/gui.py, ../agent/scanner.py, ../agent/tsk_runner.py, ../agent/setup.py, ../agent/requirements.txt, ../agent/README.md -DestinationPath ../backend/static/downloads/forensic-agent-source.zip"
+  "Compress-Archive -Force -Path ../agent/forensic_agent.py, ../agent/forensic_agent_gui.py, ../agent/gui.py, ../agent/scanner.py, ../agent/tsk_runner.py, ../agent/recovery.py, ../agent/setup.py, ../agent/requirements.txt, ../agent/README.md -DestinationPath ../backend/static/downloads/forensic-agent-source.zip"
 
 echo.
 echo ═══════════════════════════════════════════════════════════════════
