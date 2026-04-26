@@ -1616,6 +1616,201 @@ class ForensicAgentApp(ctk.CTk):
             text_color=CLR_TEXT_DIM,
         )
 
+        # ── Post-scan: ask whether to restore deleted files ─────────────
+        # The user wants an explicit "we found N deleted files — restore
+        # them?" confirmation before bytes get copied around. This is
+        # nicer UX than silently dumping recovered files on the Desktop.
+        self._maybe_offer_restore(findings)
+
+    def _maybe_offer_restore(self, findings: Dict[str, Any]) -> None:
+        """
+        Count everything we *could* hand back to the user and, if there's
+        anything, pop a Yes/No modal that consolidates them into one
+        timestamped folder on the Desktop. Sources counted:
+
+          • PhotoRec carved files (deep_recovery.recovered_files)
+          • TSK-recovered files from disk images (tsk_disk_analyses[*].recovered_files)
+          • System trash items (system_trash) — the actual file bytes
+            still live in $Recycle.Bin / .Trash, so we can copy them out
+
+        We do NOT auto-restore: the user asked for an explicit prompt.
+        """
+        deep = findings.get("deep_recovery") or {}
+        photorec_files = deep.get("recovered_files") or []
+        tsk_list = findings.get("tsk_disk_analyses") or []
+        tsk_files: List[Dict[str, Any]] = []
+        for t in tsk_list:
+            for f in (t.get("recovered_files") or []):
+                tsk_files.append(f)
+        trash_items = findings.get("system_trash") or []
+
+        total = len(photorec_files) + len(tsk_files) + len(trash_items)
+        if total <= 0:
+            return  # nothing to offer
+
+        # Compose a friendly breakdown for the modal.
+        parts: List[str] = []
+        if trash_items:
+            parts.append(f"{len(trash_items):,} from the system Trash / Recycle Bin")
+        if tsk_files:
+            parts.append(f"{len(tsk_files):,} carved from disk image(s) (Sleuth Kit)")
+        if photorec_files:
+            parts.append(f"{len(photorec_files):,} carved from raw disk (PhotoRec)")
+        breakdown = "\n  • " + "\n  • ".join(parts)
+
+        # Destination: ~/Desktop/RestoredFiles/<folder-name>-<timestamp>/
+        scan_name = (self._selected_folder.name
+                     if self._selected_folder else "scan")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        dest_root = Path.home() / "Desktop" / "RestoredFiles" / f"{scan_name}-{stamp}"
+
+        msg = (
+            f"We found {total:,} deleted file(s) we can restore for you:"
+            f"{breakdown}\n\n"
+            f"Restore them all to:\n  {dest_root}\n\n"
+            "Click Yes to copy them there now, or No to leave them where "
+            "they are (you can still view the file lists in the results "
+            "tabs)."
+        )
+
+        if not messagebox.askyesno(
+            f"{APP_TITLE} — Restore deleted files?", msg, default="yes",
+        ):
+            self._set_statusbar(
+                f"Done  ·  {total:,} deleted file(s) found "
+                "(restore declined)"
+            )
+            return
+
+        # User said yes — copy everything in.
+        self._set_chip("●  Restoring", CLR_ACCENT)
+        self._set_statusbar(f"Restoring {total:,} file(s) to {dest_root}…")
+        copied, skipped, errs = self._consolidate_restore(
+            dest_root,
+            photorec_files=photorec_files,
+            tsk_files=tsk_files,
+            trash_items=trash_items,
+        )
+
+        # Stash the restore outcome in findings so the JSON / report
+        # reflects what we did.
+        findings["restore"] = {
+            "destination": str(dest_root),
+            "copied": copied,
+            "skipped": skipped,
+            "errors": errs,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        self._set_chip("●  Done", CLR_SUCCESS)
+        self._set_statusbar(
+            f"Restored {copied:,} of {total:,} file(s) to {dest_root.name}"
+        )
+
+        # Brag a little, then offer to open the folder.
+        followup = (
+            f"Restored {copied:,} file(s) to:\n\n  {dest_root}\n\n"
+            + (f"({skipped:,} skipped, {len(errs):,} error(s).)\n\n" if (skipped or errs) else "")
+            + "Open the folder now?"
+        )
+        if messagebox.askyesno(f"{APP_TITLE} — Restore complete", followup,
+                               default="yes"):
+            try:
+                _open_in_file_manager(str(dest_root))
+            except Exception as e:
+                messagebox.showerror(APP_TITLE, f"Could not open folder:\n{e}")
+
+    def _consolidate_restore(self,
+                             dest_root: Path,
+                             *,
+                             photorec_files: List[Dict[str, Any]],
+                             tsk_files: List[Dict[str, Any]],
+                             trash_items: List[Dict[str, Any]]) -> tuple:
+        """
+        Copy everything we found into ``dest_root``, organised in three
+        sub-folders so the investigator can see provenance at a glance:
+
+            <dest_root>/
+                from_recycle_bin/
+                from_disk_image/
+                from_raw_disk_carving/
+
+        Returns ``(copied, skipped, errors)`` so the caller can report
+        outcomes truthfully.
+        """
+        import shutil
+
+        copied = 0
+        skipped = 0
+        errors: List[Dict[str, str]] = []
+
+        sub_trash    = dest_root / "from_recycle_bin"
+        sub_tsk      = dest_root / "from_disk_image"
+        sub_photorec = dest_root / "from_raw_disk_carving"
+
+        for src_list, sub_dir, source_label in (
+            (trash_items,    sub_trash,    "trash"),
+            (tsk_files,      sub_tsk,      "tsk"),
+            (photorec_files, sub_photorec, "photorec"),
+        ):
+            if not src_list:
+                continue
+            try:
+                sub_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                errors.append({"path": str(sub_dir),
+                               "error": f"mkdir failed: {e}"})
+                continue
+
+            for entry in src_list:
+                # Different sources use slightly different field names.
+                src_path = (
+                    entry.get("path")
+                    or entry.get("real_path")           # trash items
+                    or entry.get("trash_path")
+                )
+                # Display name preference for trash items: "Untitled.docx"
+                # rather than "$R8XYZ.docx".
+                display_name = (
+                    entry.get("original_name")        # trash $I sidecar
+                    or entry.get("name")
+                    or (Path(src_path).name if src_path else None)
+                    or f"unknown-{copied}"
+                )
+                if not src_path or not Path(src_path).exists():
+                    skipped += 1
+                    continue
+                try:
+                    target = self._unique_dest(sub_dir / display_name)
+                    if Path(src_path).is_dir():
+                        shutil.copytree(src_path, target,
+                                         dirs_exist_ok=False)
+                    else:
+                        shutil.copy2(src_path, target)
+                    copied += 1
+                except (OSError, shutil.Error) as e:
+                    errors.append({
+                        "path": src_path,
+                        "source": source_label,
+                        "error": str(e),
+                    })
+
+        return copied, skipped, errors
+
+    def _unique_dest(self, candidate: Path) -> Path:
+        """If ``candidate`` already exists, append ' (n)' before the suffix
+        until we find a free name. Avoids clobbering when two recovered
+        files happen to share a name (very common with PhotoRec carve)."""
+        if not candidate.exists():
+            return candidate
+        stem, suffix = candidate.stem, candidate.suffix
+        parent = candidate.parent
+        i = 2
+        while True:
+            cand = parent / f"{stem} ({i}){suffix}"
+            if not cand.exists():
+                return cand
+            i += 1
+
     def _on_submit_done(self, data: Dict[str, Any]) -> None:
         self._case_id = data.get("case_id")
         self._btn_submit.configure(state="normal", text="✓ Submitted")
