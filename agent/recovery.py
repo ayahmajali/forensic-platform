@@ -131,11 +131,21 @@ def is_available() -> bool:
 def device_for_path(path: Path) -> Optional[str]:
     """
     Return the raw block device that backs ``path``. Examples:
-        /Users/admin/Documents  →  /dev/disk3s5     (macOS)
-        C:\\Users\\admin\\Docs  →  \\\\.\\C:        (Windows)
-        /home/me/docs           →  /dev/nvme0n1p2   (Linux)
+        /Users/admin/Documents  →  /dev/disk3s5            (macOS)
+        C:\\Users\\admin\\Docs  →  \\\\.\\PhysicalDrive0   (Windows)
+        /home/me/docs           →  /dev/nvme0n1p2          (Linux)
 
     Returns None if we can't determine the device (treat as "skip recovery").
+
+    Why Windows returns the *physical drive*, not the volume:
+        Windows locks any mounted volume against raw block reads to prevent
+        live-filesystem corruption. That means PhotoRec cannot open
+        ``\\\\.\\C:`` while C: is mounted — it gets ERROR_SHARING_VIOLATION
+        and exits 1. The physical-drive form (``\\\\.\\PhysicalDriveN``)
+        sidesteps that lock and exposes raw blocks underneath the volume.
+        We resolve drive-letter → physical-disk-number via PowerShell's
+        Get-Partition cmdlet, which is present on every Windows 10/11
+        install (no extra dependencies).
     """
     sysname = platform.system()
     p = str(path)
@@ -156,8 +166,33 @@ def device_for_path(path: Path) -> Optional[str]:
             return out.strip() or None
         elif sysname == "Windows":
             drive = Path(p).resolve().drive  # "C:"
-            if drive:
-                return f"\\\\.\\{drive}"
+            if not drive:
+                return None
+            letter = drive.rstrip(":")
+            # Map drive letter → physical disk number via PowerShell.
+            # CREATE_NO_WINDOW keeps the briefly-spawned PS console hidden
+            # so we don't flash a black box at the investigator.
+            try:
+                ps_cmd = (
+                    f"$ErrorActionPreference='Stop'; "
+                    f"(Get-Partition -DriveLetter {letter} "
+                    f"| Select-Object -First 1 -ExpandProperty DiskNumber)"
+                )
+                ps_out = subprocess.check_output(
+                    ["powershell", "-NoProfile", "-Command", ps_cmd],
+                    text=True, stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                disk_no = ps_out.strip()
+                if disk_no.isdigit():
+                    return f"\\\\.\\PhysicalDrive{disk_no}"
+            except (subprocess.SubprocessError, OSError):
+                pass
+            # Fallback if PowerShell isn't available or the letter doesn't
+            # map (network share, mounted ISO, etc.). The volume form
+            # rarely works for system drives but at least gives PhotoRec
+            # something to chew on for unmounted/external volumes.
+            return f"\\\\.\\{drive}"
     except (subprocess.SubprocessError, OSError):
         return None
     return None
@@ -522,11 +557,27 @@ def run_photorec(
 
     error_msg = ""
     if proc.returncode != 0 and not recovered:
-        error_msg = (
-            f"PhotoRec exited with code {proc.returncode}. "
-            f"On Unix this usually means the process needs root — "
-            f"re-launch the agent with `sudo`."
-        )
+        sysname = platform.system()
+        if sysname == "Windows":
+            error_msg = (
+                f"PhotoRec exited with code {proc.returncode} on "
+                f"{device}.\n\n"
+                "Most common causes on Windows:\n"
+                "  • UAC was declined or the agent is not running as "
+                "administrator (right-click the .exe → Run as "
+                "administrator).\n"
+                "  • The selected drive is busy / in use by another "
+                "process. Close any open files on it and retry.\n"
+                "  • The drive is encrypted with BitLocker — PhotoRec "
+                "cannot read raw blocks through BitLocker. Suspend "
+                "BitLocker for the drive and retry."
+            )
+        else:
+            error_msg = (
+                f"PhotoRec exited with code {proc.returncode}. "
+                f"On Unix this usually means the process needs root — "
+                f"re-launch the agent with `sudo`."
+            )
 
     return {
         "tool": "photorec",
