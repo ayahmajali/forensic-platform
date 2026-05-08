@@ -482,7 +482,13 @@ def run_photorec(
 
     out_prefix = str(out_dir / "recup_dir")
     cmd_arg = "partition_none,fileopt,everything,enable,search"
-    photorec_args: List[str] = ["/d", out_prefix, "/cmd", device, cmd_arg]
+    # /log enables PhotoRec's own diagnostic log → photorec.log in CWD.
+    # We set CWD to out_dir below so the log lands somewhere we control,
+    # and read it back after the run for the GUI's "Tool message" panel.
+    # Without this, when PhotoRec exits with code 1 we have no idea why,
+    # because its error output went to a console buffer that disappeared
+    # the moment the child died.
+    photorec_args: List[str] = ["/log", "/d", out_prefix, "/cmd", device, cmd_arg]
 
     if elevate and needs_admin():
         cmd = _build_elevated_command(binary, photorec_args, on_log=on_log)
@@ -492,25 +498,34 @@ def run_photorec(
     if on_log:
         on_log(f"$ {' '.join(_shell_quote(x) for x in cmd)}")
 
-    # Windows-specific subprocess setup. The agent is built with
-    # `--windowed` (no console), and PhotoRec is a console app that uses
-    # ncurses for its TUI. If we just inherit the parent's std handles,
-    # PhotoRec sees an invalid stdin handle and a missing console, fails
-    # to initialise ncurses, and exits with code 1 immediately — exactly
-    # the behaviour we were seeing. The fix is to give the child a hidden
-    # console of its own (CREATE_NO_WINDOW) and a valid no-op stdin
-    # (DEVNULL). Manual `photorec_win.exe` runs from PowerShell work
-    # because PowerShell already provides a real console + stdin.
+    # Windows-specific subprocess setup. PhotoRec uses Win32 console
+    # APIs for its TUI (the "Stop" button you see in a manual run is a
+    # console UI element), so it needs a real console window — not just
+    # a console *handle*. CREATE_NO_WINDOW allocates a handle but no
+    # window, which makes PhotoRec call GetConsoleScreenBufferInfo()
+    # against an invalid buffer and exit 1 immediately. CREATE_NEW_CONSOLE
+    # gives the child its own real console; PhotoRec then initializes
+    # cleanly. The cost is a visible console window for the duration of
+    # the scan, which for a forensics demo is arguably useful — the
+    # operator can watch PhotoRec's live carving progress.
+    #
+    # stdout is still piped because PhotoRec's banner + summary lines
+    # are plain printf, captured independently of the console buffer.
+    # The ncurses-style status line goes to the console window only.
     popen_kwargs: Dict[str, Any] = {
         "stdin":  subprocess.DEVNULL,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
         "text":   True,
         "bufsize": 1,
+        # cwd is set to out_dir so PhotoRec's /log file (photorec.log)
+        # lands somewhere we can read back, instead of polluting the
+        # agent's working directory (or _MEIPASS, which is read-only).
+        "cwd":    str(out_dir),
     }
     if platform.system() == "Windows":
         popen_kwargs["creationflags"] = (
-            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
         )
 
     try:
@@ -529,12 +544,12 @@ def run_photorec(
 
     log_lines: List[str] = []
     try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.rstrip()
-            log_lines.append(line)
-            if on_log:
-                on_log(line)
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                line = line.rstrip()
+                log_lines.append(line)
+                if on_log:
+                    on_log(line)
         proc.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         proc.kill()
@@ -551,6 +566,24 @@ def run_photorec(
                       "Re-run from a terminal with a longer budget if the "
                       "device is large."),
         }
+
+    # Read PhotoRec's own diagnostic log (created by the /log flag).
+    # This is the only way to see WHY PhotoRec exited 1 on Windows —
+    # its console buffer is gone the moment the child dies.
+    photorec_log_text = ""
+    photorec_log_path = out_dir / "photorec.log"
+    if photorec_log_path.is_file():
+        try:
+            photorec_log_text = photorec_log_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            pass
+        if on_log and photorec_log_text:
+            on_log("--- photorec.log ---")
+            for ln in photorec_log_text.splitlines()[-80:]:
+                on_log(ln)
+            on_log("--- end photorec.log ---")
 
     # Walk the output prefix.* directories to enumerate what landed.
     recovered: List[Dict[str, Any]] = []
@@ -594,15 +627,39 @@ def run_photorec(
                 f"re-launch the agent with `sudo`."
             )
 
+        # If PhotoRec wrote its own diagnostic log, show the tail to the
+        # user — that's where the actual root cause (e.g. "fopen failed
+        # for \\.\PhysicalDrive0", "no partition found", etc.) is going
+        # to be. Tail only because the full file can be megabytes.
+        if photorec_log_text.strip():
+            tail = "\n".join(photorec_log_text.splitlines()[-25:])
+            error_msg += (
+                "\n\nPhotoRec's own log (tail, full copy at "
+                f"{photorec_log_path}):\n"
+                "────────────────────────────────────────\n"
+                f"{tail}"
+            )
+
+    # Combine our captured stdout/stderr with PhotoRec's own log file
+    # so the GUI's Deep Recovery tab gets one consolidated text blob.
+    combined_log = "\n".join(log_lines[-200:])
+    if photorec_log_text:
+        combined_log = (
+            combined_log
+            + "\n\n=== PhotoRec internal log (photorec.log) ===\n"
+            + photorec_log_text
+        )
+
     return {
         "tool": "photorec",
         "device": device,
         "output_dir": str(out_dir),
         "recovered_count": len(recovered),
         "recovered_files": recovered,
-        "log": "\n".join(log_lines[-200:]),  # tail only — full log is on disk
+        "log": combined_log,
         "exit_code": proc.returncode,
         "error": error_msg,
+        "photorec_log_path": str(photorec_log_path),
     }
 
 
