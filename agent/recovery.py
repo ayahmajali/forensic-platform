@@ -444,7 +444,7 @@ def run_photorec(
     out_dir: Path,
     on_log: Optional[LogFn] = None,
     file_types: Optional[List[str]] = None,
-    timeout_seconds: int = 1800,
+    timeout_seconds: int = 14400,   # 4h — internal NVMe ≈ 1h40m, USB ≈ 10–60m
     elevate: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -492,14 +492,29 @@ def run_photorec(
     if on_log:
         on_log(f"$ {' '.join(_shell_quote(x) for x in cmd)}")
 
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+    # Windows-specific subprocess setup. The agent is built with
+    # `--windowed` (no console), and PhotoRec is a console app that uses
+    # ncurses for its TUI. If we just inherit the parent's std handles,
+    # PhotoRec sees an invalid stdin handle and a missing console, fails
+    # to initialise ncurses, and exits with code 1 immediately — exactly
+    # the behaviour we were seeing. The fix is to give the child a hidden
+    # console of its own (CREATE_NO_WINDOW) and a valid no-op stdin
+    # (DEVNULL). Manual `photorec_win.exe` runs from PowerShell work
+    # because PowerShell already provides a real console + stdin.
+    popen_kwargs: Dict[str, Any] = {
+        "stdin":  subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text":   True,
+        "bufsize": 1,
+    }
+    if platform.system() == "Windows":
+        popen_kwargs["creationflags"] = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
         )
+
+    try:
+        proc = subprocess.Popen(cmd, **popen_kwargs)
     except FileNotFoundError as e:
         return {
             "tool": "photorec",
