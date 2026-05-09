@@ -105,6 +105,26 @@ if exist "vendor\testdisk" (
     set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-binary ^"%%F;testdisk^""
   )
 )
+REM PhotoRec needs its ncurses terminfo file at runtime — without it,
+REM photorec_win.exe exits with "Terminfo file is missing." The terminfo
+REM entry for the cygwin terminal type lives at vendor\testdisk\63\cygwin
+REM (ncurses convention: <hex of first letter>/<terminal name>). Bundle
+REM the whole 63\ folder so any future terminal types we add come along
+REM for the ride too. Recovery.py sets TERMINFO=<dir of binary> at runtime
+REM so ncurses finds it under <_MEIPASS>\testdisk\63\cygwin.
+if exist "vendor\testdisk\63" (
+  set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-data ^"vendor\testdisk\63;testdisk\63^""
+)
+REM Same story for the qt.conf and platforms\ folder — only used by
+REM qphotorec_win.exe (the GUI variant we don't actually invoke), but
+REM bundling them keeps the testdisk\ tree internally consistent so a
+REM future feature can call qphotorec without another build round trip.
+if exist "vendor\testdisk\qt.conf" (
+  set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-data ^"vendor\testdisk\qt.conf;testdisk^""
+)
+if exist "vendor\testdisk\platforms" (
+  set "TSK_BIN_ARGS=!TSK_BIN_ARGS! --add-data ^"vendor\testdisk\platforms;testdisk\platforms^""
+)
 
 echo  Creating clean build venv ...
 python -m venv .venv-build

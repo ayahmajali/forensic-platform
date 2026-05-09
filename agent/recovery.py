@@ -527,6 +527,20 @@ def run_photorec(
         popen_kwargs["creationflags"] = (
             getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
         )
+        # PhotoRec's bundled ncurses (PDCurses) needs to find a terminfo
+        # entry for whichever terminal type it thinks it's running under.
+        # The Windows TestDisk distribution ships `63/cygwin` next to the
+        # binary; without it, PhotoRec exits with "Terminfo file is
+        # missing." Tell ncurses to look in the binary's own directory
+        # (in a frozen bundle that's _MEIPASS\testdisk\, where the build
+        # script has placed `63/cygwin` via --add-data).
+        env = os.environ.copy()
+        env["TERMINFO"] = os.path.dirname(os.path.abspath(binary))
+        # Belt-and-suspenders: also point TERM at "cygwin" so PDCurses
+        # picks the entry we shipped, rather than probing for $TERM (which
+        # on Windows is often unset → ncurses falls back to "unknown").
+        env.setdefault("TERM", "cygwin")
+        popen_kwargs["env"] = env
 
     try:
         proc = subprocess.Popen(cmd, **popen_kwargs)
