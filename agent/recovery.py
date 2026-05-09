@@ -51,6 +51,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -330,6 +332,91 @@ def _ensure_outdir(out_root: Path) -> Path:
     return target
 
 
+# Lines PhotoRec writes to photorec.log that we want to surface clearly:
+#     "Pass 1 - Reading sector  43665251/1000215216, 58198 files found"
+#     "Elapsed time 0h04m39s - Estimated time to completion 1h41m51"
+_PHOTOREC_PASS_RE = re.compile(
+    r"Reading sector\s+(\d+)\s*/\s*(\d+),\s*(\d+)\s*files? found",
+    re.IGNORECASE,
+)
+_PHOTOREC_ETA_RE = re.compile(
+    r"Estimated time to completion\s+(\S+)",
+    re.IGNORECASE,
+)
+
+
+def _tail_photorec_log(
+    log_path: Path,
+    on_log: Optional[LogFn],
+    stop_event: threading.Event,
+    poll_interval: float = 1.5,
+) -> None:
+    """
+    Background thread that watches photorec.log while PhotoRec is running
+    and forwards new content to the GUI's log callback. Without this the
+    GUI's log pane goes silent for the entire scan because PhotoRec's
+    progress is written to its hidden console buffer (not stdout, which
+    we've already piped). Reading the /log file is the only reliable way
+    to surface live progress to the operator.
+
+    The thread is intentionally tolerant of the file not existing yet
+    (PhotoRec creates it after a short setup phase) and of partial reads.
+    Stops when stop_event is set.
+    """
+    if not on_log:
+        return
+    pos = 0
+    last_progress = 0.0
+    last_eta_emitted: str = ""
+    while not stop_event.is_set():
+        try:
+            if log_path.is_file():
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                    pos = f.tell()
+                if chunk:
+                    for raw in chunk.splitlines():
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        # Forward the raw line to the log pane
+                        on_log(line)
+                        # Compute and emit a friendly progress line when
+                        # we see a "Reading sector x/y" report. This makes
+                        # the log feel "alive" for an operator who's used
+                        # to a progress bar.
+                        m = _PHOTOREC_PASS_RE.search(line)
+                        if m:
+                            try:
+                                cur, total, found = (int(g) for g in m.groups())
+                                if total > 0:
+                                    pct = (cur / total) * 100.0
+                                    if pct - last_progress >= 1.0 or pct >= 99.5:
+                                        on_log(
+                                            f"[progress] {pct:5.1f}% complete  ·  "
+                                            f"{found:,} files carved so far"
+                                        )
+                                        last_progress = pct
+                            except (TypeError, ValueError):
+                                pass
+                        # Emit ETA on every change so the operator can
+                        # reassure themselves it's not frozen.
+                        m = _PHOTOREC_ETA_RE.search(line)
+                        if m and m.group(1) != last_eta_emitted:
+                            last_eta_emitted = m.group(1)
+                            on_log(
+                                f"[eta] estimated time remaining: "
+                                f"{last_eta_emitted}"
+                            )
+        except OSError:
+            # log file might be locked momentarily on Windows; just retry
+            pass
+        # Wait OR exit early when the main thread signals completion.
+        if stop_event.wait(poll_interval):
+            break
+
+
 def desktop_recovery_root() -> Path:
     """~/Desktop/TheDeletedFiles, the same root tsk_runner uses."""
     desk = Path.home() / "Desktop" / "TheDeletedFiles"
@@ -524,6 +611,15 @@ def run_photorec(
         "cwd":    str(out_dir),
     }
     if platform.system() == "Windows":
+        # CREATE_NEW_CONSOLE allocates a real console buffer (required by
+        # PhotoRec's PDCurses TUI), but we hide the WINDOW so the operator
+        # only sees our agent GUI — not raw escape codes scrolling in a
+        # black box. ncurses doesn't care about window visibility, only
+        # buffer state, so PhotoRec runs cleanly under SW_HIDE.
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE — console buffer exists but is hidden
+        popen_kwargs["startupinfo"] = si
         popen_kwargs["creationflags"] = (
             getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010)
         )
@@ -556,6 +652,27 @@ def run_photorec(
             "error": f"Could not launch PhotoRec: {e}",
         }
 
+    # Spin up the photorec.log tailer so the operator sees live progress
+    # in the GUI's log pane (PhotoRec's own console is hidden, so this is
+    # the only feedback they get). Daemon thread — Python won't wait for
+    # it on shutdown, and we explicitly stop it in the finally block.
+    photorec_log_path = out_dir / "photorec.log"
+    tail_stop = threading.Event()
+    tail_thread: Optional[threading.Thread] = None
+    if on_log:
+        on_log(
+            f"[photorec] launching against {device} → "
+            f"{out_dir.name}; this can take 5–60 minutes depending on "
+            "device size. Live progress will stream below."
+        )
+        tail_thread = threading.Thread(
+            target=_tail_photorec_log,
+            args=(photorec_log_path, on_log, tail_stop),
+            daemon=True,
+            name="photorec-log-tailer",
+        )
+        tail_thread.start()
+
     log_lines: List[str] = []
     try:
         if proc.stdout is not None:
@@ -568,6 +685,9 @@ def run_photorec(
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+        tail_stop.set()
+        if tail_thread is not None:
+            tail_thread.join(timeout=3.0)
         return {
             "tool": "photorec",
             "device": device,
@@ -580,6 +700,14 @@ def run_photorec(
                       "Re-run from a terminal with a longer budget if the "
                       "device is large."),
         }
+    finally:
+        # Always stop the tailer, even on the happy path. Sleep briefly
+        # first so it can drain the final batch of log lines before we
+        # tear it down.
+        time.sleep(0.5)
+        tail_stop.set()
+        if tail_thread is not None:
+            tail_thread.join(timeout=3.0)
 
     # Read PhotoRec's own diagnostic log (created by the /log flag).
     # This is the only way to see WHY PhotoRec exited 1 on Windows —
