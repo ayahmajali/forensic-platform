@@ -850,7 +850,7 @@ class ForensicAgentApp(ctk.CTk):
     def _build_card_run(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
         self._card_header(
-            card, step="2", title="Analyse",
+            card, step="2", title="Scan",
             subtitle="Hashes every file, surfaces recently modified items, "
                      "runs Sleuth Kit on any disk image inside the folder, "
                      "and enumerates the system Trash for deleted files.",
@@ -864,7 +864,7 @@ class ForensicAgentApp(ctk.CTk):
         start_row.pack(fill="x")
 
         self._btn_start = ctk.CTkButton(
-            start_row, text="▶   Start Analysis", height=52, width=240,
+            start_row, text="▶   Start Scan", height=52, width=240,
             fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
             text_color="white", font=ctk.CTkFont(size=15, weight="bold"),
             corner_radius=12,
@@ -922,7 +922,7 @@ class ForensicAgentApp(ctk.CTk):
         # Empty-state panel, replaced with CTkTabview once analysis runs.
         self._results_body = body
         self._lbl_results_empty = ctk.CTkLabel(
-            body, text="Results will appear here once the analysis completes.",
+            body, text="Results will appear here once the scan completes.",
             font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
         )
         self._lbl_results_empty.pack(anchor="w", pady=16)
@@ -959,7 +959,7 @@ class ForensicAgentApp(ctk.CTk):
         self._btn_save.pack(side="left", padx=(10, 0))
 
         self._lbl_submit_status = ctk.CTkLabel(
-            body, text="Run the analysis to unlock submission.",
+            body, text="Run the scan to unlock submission.",
             font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
             anchor="w", justify="left", wraplength=700,
         )
@@ -1105,7 +1105,7 @@ class ForensicAgentApp(ctk.CTk):
         self._lbl_folder.configure(text=path, text_color=CLR_TEXT)
         self._btn_start.configure(state="normal")
         self._lbl_run_status.configure(
-            text="Ready. Press Start Analysis to begin.",
+            text="Ready. Press Start Scan to begin.",
             text_color=CLR_TEXT_DIM,
         )
 
@@ -1131,7 +1131,7 @@ class ForensicAgentApp(ctk.CTk):
         )
         self._lbl_current.configure(text=" ")
         self._set_chip("●  Analyzing", CLR_ACCENT)
-        self._set_statusbar("Analysis in progress…")
+        self._set_statusbar("Scan in progress…")
 
         self._scan_thread = threading.Thread(
             target=self._scan_worker,
@@ -1527,12 +1527,12 @@ class ForensicAgentApp(ctk.CTk):
             self._on_scan_done(p["findings"])
 
         elif name == "scan_error":
-            self._btn_start.configure(state="normal", text="▶  Start Analysis")
-            self._lbl_run_status.configure(text="✗ Analysis failed — see dialog.",
+            self._btn_start.configure(state="normal", text="▶  Start Scan")
+            self._lbl_run_status.configure(text="✗ Scan failed — see dialog.",
                                             text_color=CLR_DANGER)
             self._set_chip("●  Error", CLR_DANGER)
-            self._set_statusbar("Error during analysis.")
-            messagebox.showerror(APP_TITLE, f"Analysis failed:\n\n{p['error']}")
+            self._set_statusbar("Error during scan.")
+            messagebox.showerror(APP_TITLE, f"Scan failed:\n\n{p['error']}")
 
         elif name == "submit_done":
             self._on_submit_done(p)
@@ -1593,12 +1593,12 @@ class ForensicAgentApp(ctk.CTk):
             else:
                 deep_banner = f"  ·  PhotoRec: {deep.get('status', 'error')}"
         self._lbl_run_status.configure(
-            text=f"✓ Analysis complete — {total_files:,} files processed"
+            text=f"✓ Scan complete — {total_files:,} files processed"
                  f"{tsk_banner}{trash_banner}{deep_banner}.",
             text_color=CLR_SUCCESS,
         )
         self._lbl_current.configure(text=" ")
-        self._btn_start.configure(state="normal", text="▶  Re-Analyze")
+        self._btn_start.configure(state="normal", text="▶  Re-scan")
         self._set_chip("●  Done", CLR_SUCCESS)
         self._set_statusbar(
             f"Done  ·  {total_files:,} files  ·  {len(modified):,} modified  "
@@ -1870,7 +1870,7 @@ class ForensicAgentApp(ctk.CTk):
         self._btn_submit.configure(state="disabled", text="Submit Findings")
         self._btn_save.configure(state="disabled")
         self._lbl_submit_status.configure(
-            text="Run the analysis to unlock submission.",
+            text="Run the scan to unlock submission.",
             text_color=CLR_MUTED,
         )
         if self._case_panel is not None:
@@ -1938,7 +1938,7 @@ class ForensicAgentApp(ctk.CTk):
             w.destroy()
         self._lbl_results_empty = ctk.CTkLabel(
             self._results_body,
-            text="Results will appear here once the analysis completes.",
+            text="Results will appear here once the scan completes.",
             font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
         )
         self._lbl_results_empty.pack(anchor="w", pady=16)
@@ -2662,7 +2662,7 @@ class ForensicAgentApp(ctk.CTk):
         if not errs:
             ctk.CTkLabel(
                 wrap,
-                text="No errors. The analysis completed cleanly.",
+                text="No errors. The scan completed cleanly.",
                 font=ctk.CTkFont(size=12), text_color=CLR_MUTED,
             ).pack(anchor="w", pady=16)
             return
