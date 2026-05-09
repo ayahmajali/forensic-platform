@@ -533,6 +533,7 @@ def run_photorec(
     file_types: Optional[List[str]] = None,
     timeout_seconds: int = 14400,   # 4h — internal NVMe ≈ 1h40m, USB ≈ 10–60m
     elevate: bool = True,
+    mode: str = "fast",
 ) -> Dict[str, Any]:
     """
     Run PhotoRec non-interactively against ``device``, dropping recovered
@@ -568,7 +569,61 @@ def run_photorec(
         }
 
     out_prefix = str(out_dir / "recup_dir")
-    cmd_arg = "partition_none,fileopt,everything,enable,search"
+    # File-type filter: PhotoRec ships with ~480 file-format signatures.
+    # Checking every byte against every signature is what makes a 30 GB
+    # USB scan take 15+ minutes and produce 80,000+ false positives from
+    # random byte patterns that happen to match something obscure.
+    #
+    # For an investigator's typical workload — and especially for a live
+    # demo — restricting to common business / multimedia formats makes
+    # the scan ~30–50× faster and the result list radically more useful.
+    # Below is a curated short list: documents, images, archives, media.
+    # If a real case needs an obscure format (Quake save, Lotus 1-2-3,
+    # ELF binary, etc.) the operator can run a second pass with the full
+    # set by setting the PHOTOREC_ALL_TYPES environment variable.
+    _DEMO_TYPES = (
+        "jpg", "png", "gif", "bmp", "tiff", "heic",       # images
+        "pdf", "doc", "docx", "xls", "xlsx",              # office docs
+        "ppt", "pptx", "txt", "rtf",
+        "zip", "rar", "7z", "tar", "gz",                  # archives
+        "mp3", "mp4", "avi", "mov", "wav", "wmv",         # media
+        "psd", "ai",                                       # design
+        "html", "xml",                                     # markup
+    )
+    # Mode resolution: explicit `mode` arg from the GUI wins, then the
+    # env var override (handy for CLI users), then default to "fast".
+    effective_mode = (mode or "fast").strip().lower()
+    if os.environ.get("PHOTOREC_ALL_TYPES", "").lower() in ("1", "true", "yes"):
+        effective_mode = "thorough"
+
+    if effective_mode == "thorough":
+        # "Test every byte" — scan with PhotoRec's full signature set.
+        # Slower (15–30 min on a 30 GB USB) but catches every supported
+        # format. Best for real casework where we don't know what we're
+        # looking for; expect many false-positive hits from random byte
+        # patterns that happen to match obscure signatures.
+        cmd_arg = "partition_none,fileopt,everything,enable,search"
+        if on_log:
+            on_log(
+                "[photorec] mode: THOROUGH — testing every byte against "
+                "all 480 file signatures. ETA on a 30 GB USB ≈ 15–30 min."
+            )
+    else:
+        # Default fast path: disable everything, then enable only the
+        # demo / common-case formats. Resulting cmd looks like:
+        #   partition_none,fileopt,everything,disable,jpg,enable,pdf,enable,...,search
+        enables = ",".join(f"{t},enable" for t in _DEMO_TYPES)
+        cmd_arg = (
+            f"partition_none,fileopt,everything,disable,"
+            f"{enables},search"
+        )
+        if on_log:
+            on_log(
+                f"[photorec] mode: FAST — hunting for {len(_DEMO_TYPES)} "
+                f"common file types ({', '.join(_DEMO_TYPES[:6])}, …). "
+                "ETA on a 30 GB USB ≈ 2–5 min."
+            )
+
     # /log enables PhotoRec's own diagnostic log → photorec.log in CWD.
     # We set CWD to out_dir below so the log lands somewhere we control,
     # and read it back after the run for the GUI's "Tool message" panel.
@@ -814,6 +869,7 @@ def recover_for_folder(
     *,
     on_log: Optional[LogFn] = None,
     elevate: bool = True,
+    mode: str = "fast",
 ) -> Dict[str, Any]:
     """
     The high-level entry point the GUI actually calls. Given a selected
@@ -902,6 +958,7 @@ def recover_for_folder(
     log(f"Recovering into: {out_dir}")
     result = run_photorec(
         device=device, out_dir=out_dir, on_log=log, elevate=elevate,
+        mode=mode,
     )
     result["status"] = "ok" if not result.get("error") else "error"
     result["trim"] = trim

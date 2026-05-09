@@ -482,6 +482,11 @@ class ForensicAgentApp(ctk.CTk):
         # default because (a) it is slow and (b) it pops a system admin
         # prompt (Touch ID / UAC / PolicyKit). The investigator opts in.
         self._deep_recover = ctk.BooleanVar(value=False)
+        # PhotoRec scan mode — "fast" hunts for ~30 common file types in a
+        # few minutes, "thorough" tests every byte against all 480 PhotoRec
+        # signatures and takes 15–30 min on a 30 GB USB. Default to fast
+        # because that's what an investigator wants 95% of the time.
+        self._deep_mode = ctk.StringVar(value="fast")
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -822,7 +827,96 @@ class ForensicAgentApp(ctk.CTk):
             ),
             font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
             justify="left", wraplength=820,
-        ).pack(anchor="w", padx=18, pady=(0, 16))
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        # ── Mode selector: Fast vs Thorough ───────────────────────────────
+        # Two side-by-side mode cards inside the deep_recover panel. Picked
+        # design over a CTkSegmentedButton because we want each mode to have
+        # its own readable description + ETA hint, not just a one-word label.
+        mode_section = ctk.CTkFrame(deep_card, fg_color="transparent")
+        mode_section.pack(fill="x", padx=18, pady=(0, 16))
+        ctk.CTkLabel(
+            mode_section, text="SCAN MODE",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w", pady=(0, 6))
+
+        modes_grid = ctk.CTkFrame(mode_section, fg_color="transparent")
+        modes_grid.pack(fill="x")
+        modes_grid.grid_columnconfigure(0, weight=1)
+        modes_grid.grid_columnconfigure(1, weight=1)
+
+        self._build_mode_card(
+            modes_grid, column=0, value="fast",
+            title="Fast",
+            badge="RECOMMENDED",
+            badge_color=CLR_SUCCESS,
+            eta="~ 2–5 min on a 30 GB USB",
+            detail=(
+                "Hunts for ~30 common forensic file types: documents (PDF, "
+                "DOCX, XLSX), images (JPG, PNG, HEIC), media (MP3, MP4, "
+                "MOV), archives (ZIP, RAR, 7Z), and a few more. Best for "
+                "demos and the typical 'find the deleted photo' case."
+            ),
+        )
+        self._build_mode_card(
+            modes_grid, column=1, value="thorough",
+            title="Thorough — test every byte",
+            badge="SLOW",
+            badge_color=CLR_WARN,
+            eta="~ 15–30 min on a 30 GB USB",
+            detail=(
+                "Tests every byte against PhotoRec's full set of 480 file "
+                "signatures — including obscure formats like firmware "
+                "images, game saves, and engineering CAD. Use this when "
+                "the case calls for an exotic file type or you want "
+                "maximum recall. Expect many extra false-positive hits."
+            ),
+        )
+
+    def _build_mode_card(
+        self, parent, *, column: int, value: str, title: str, badge: str,
+        badge_color: str, eta: str, detail: str,
+    ) -> None:
+        """One of the two side-by-side scan-mode cards under Deep Recover.
+
+        Each card is a clickable container with a radio button — clicking
+        anywhere on the card selects the mode. Picked over a plain radio
+        list because the descriptions need room to breathe.
+        """
+        card = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE_2, corner_radius=10,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        card.grid(row=0, column=column, sticky="ew",
+                  padx=(0, 6) if column == 0 else (6, 0), pady=0)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=14, pady=(12, 4))
+        ctk.CTkRadioButton(
+            head, text=title, variable=self._deep_mode, value=value,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=CLR_TEXT,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            radiobutton_width=18, radiobutton_height=18,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head, text=badge,
+            font=ctk.CTkFont(size=8, weight="bold"),
+            text_color=badge_color, fg_color=CLR_ELEVATED,
+            corner_radius=999, padx=7, pady=2,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            card, text=eta,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=CLR_ACCENT, anchor="w", justify="left",
+        ).pack(anchor="w", padx=14, pady=(0, 4))
+        ctk.CTkLabel(
+            card, text=detail,
+            font=ctk.CTkFont(size=10), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=370, anchor="w",
+        ).pack(anchor="w", padx=14, pady=(0, 14))
 
     def _option_row(self, parent, *, row: int, column: int,
                     title: str, detail: str, variable) -> None:
@@ -1140,6 +1234,7 @@ class ForensicAgentApp(ctk.CTk):
                 bool(self._include_browsers.get()),
                 bool(self._recover_deleted.get()),
                 bool(self._deep_recover.get()),
+                str(self._deep_mode.get() or "fast"),
             ),
             daemon=True,
         )
@@ -1197,7 +1292,8 @@ class ForensicAgentApp(ctk.CTk):
     # ─────────────────────────────────────────────────────────────────
 
     def _scan_worker(self, root: Path, include_browsers: bool,
-                     recover_deleted: bool, deep_recover: bool = False) -> None:
+                     recover_deleted: bool, deep_recover: bool = False,
+                     deep_mode: str = "fast") -> None:
         """
         Main analysis pipeline. Runs entirely on a background thread.
 
@@ -1328,7 +1424,7 @@ class ForensicAgentApp(ctk.CTk):
                     self._q.put(("disk_log", {"text": line}))
 
                 deep_recovery = rec_mod.recover_for_folder(
-                    root, on_log=_rec_log, elevate=True,
+                    root, on_log=_rec_log, elevate=True, mode=deep_mode,
                 )
                 # Bonus: feed the recovered count into the top counter so
                 # the headline number reflects PhotoRec's contribution too.
