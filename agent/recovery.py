@@ -596,10 +596,15 @@ def run_photorec(
     _DEMO_TYPES = (
         # Images
         "jpg", "png", "gif", "bmp", "tif",
-        # Office documents — binary formats (legacy Office '97-2003)
-        "pdf", "doc", "xls", "ppt", "rtf", "txt",
+        # Documents — `doc` is the OLE2 compound-document signature that
+        # covers ALL legacy Office (.doc, .xls, .ppt) since they share the
+        # same container format. PhotoRec does NOT have separate `xls`
+        # or `ppt` identifiers; passing them causes "Syntax error in
+        # command line".
+        "pdf", "doc", "rtf", "txt",
         # Archives — also catches modern Office Open XML (.docx, .xlsx,
-        # .pptx) since those are ZIP containers under the hood
+        # .pptx) since those are ZIP containers under the hood. Recovered
+        # files appear as f0001234.zip and can be renamed by file content.
         "zip", "rar", "7z", "gz", "tar",
         # Media
         "mp3", "mp4", "avi", "mov", "wav",
