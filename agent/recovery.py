@@ -581,14 +581,19 @@ def run_photorec(
     # If a real case needs an obscure format (Quake save, Lotus 1-2-3,
     # ELF binary, etc.) the operator can run a second pass with the full
     # set by setting the PHOTOREC_ALL_TYPES environment variable.
+    # IMPORTANT: every name below must be a valid PhotoRec format identifier
+    # (verified against `photorec_win.exe /list_files` output for 7.3-WIP).
+    # Using an unknown name (e.g. "tiff" — PhotoRec calls it "tif") causes
+    # the cmd parser to abort with "Syntax error in command line" and the
+    # whole scan dies before reading a single sector. Stick to the short,
+    # canonical names. If you want to add a format, run `/list_files`
+    # first and copy the exact identifier.
     _DEMO_TYPES = (
-        "jpg", "png", "gif", "bmp", "tiff", "heic",       # images
+        "jpg", "png", "gif", "bmp", "tif",                # images
         "pdf", "doc", "docx", "xls", "xlsx",              # office docs
         "ppt", "pptx", "txt", "rtf",
         "zip", "rar", "7z", "tar", "gz",                  # archives
-        "mp3", "mp4", "avi", "mov", "wav", "wmv",         # media
-        "psd", "ai",                                       # design
-        "html", "xml",                                     # markup
+        "mp3", "mp4", "avi", "mov", "wav",                # media
     )
     # Mode resolution: explicit `mode` arg from the GUI wins, then the
     # env var override (handy for CLI users), then default to "fast".

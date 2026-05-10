@@ -1729,6 +1729,15 @@ class ForensicAgentApp(ctk.CTk):
           • System trash items (system_trash) — the actual file bytes
             still live in $Recycle.Bin / .Trash, so we can copy them out
 
+        We FILTER trash items by their original location: only items that
+        were originally inside the scanned folder (or a subfolder of it)
+        get offered for restore. Without this filter the agent would
+        cheerfully restore every old item the user has in their system
+        Recycle Bin — including a multi-gigabyte XAMPP install they
+        deleted months ago — which is invariably surprising and
+        unwelcome. The investigator scanned a specific folder; we should
+        only restore things that actually belong to that folder.
+
         We do NOT auto-restore: the user asked for an explicit prompt.
         """
         deep = findings.get("deep_recovery") or {}
@@ -1738,7 +1747,22 @@ class ForensicAgentApp(ctk.CTk):
         for t in tsk_list:
             for f in (t.get("recovered_files") or []):
                 tsk_files.append(f)
-        trash_items = findings.get("system_trash") or []
+
+        # Filter trash items: keep only those whose recorded original
+        # path lives under the folder the user just scanned. The path
+        # field comes from the $I sidecar (Windows) or .Trash plist
+        # (macOS); it's a string like "C:\\Users\\me\\Desktop\\foo.pdf".
+        all_trash = findings.get("system_trash") or []
+        trash_items = self._filter_trash_to_scanned_folder(all_trash)
+        skipped_trash = len(all_trash) - len(trash_items)
+        if skipped_trash > 0:
+            self._q.put(("disk_log", {
+                "text": (
+                    f"[restore] {skipped_trash} Recycle Bin item(s) "
+                    "skipped because their original location is outside "
+                    f"the scanned folder ({self._selected_folder})."
+                ),
+            }))
 
         total = len(photorec_files) + len(tsk_files) + len(trash_items)
         if total <= 0:
@@ -1814,6 +1838,46 @@ class ForensicAgentApp(ctk.CTk):
                 _open_in_file_manager(str(dest_root))
             except Exception as e:
                 messagebox.showerror(APP_TITLE, f"Could not open folder:\n{e}")
+
+    def _filter_trash_to_scanned_folder(
+        self, trash_items: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Return only the trash items whose original location is inside the
+        folder the investigator just scanned. We try every plausible field
+        name the scanner might have populated ("original_path", "original",
+        "source_path", "path"). When the scanned folder is unknown for
+        some reason (shouldn't happen in normal flow), we fail SAFE — we
+        return an empty list rather than restoring everything, because
+        accidentally restoring an old XAMPP install onto someone's
+        Desktop is a much worse failure mode than restoring nothing.
+        """
+        if not self._selected_folder:
+            return []
+        try:
+            scanned_root = Path(self._selected_folder).resolve()
+        except OSError:
+            return []
+        scanned_str = str(scanned_root).lower().rstrip("\\/")
+
+        kept: List[Dict[str, Any]] = []
+        for item in trash_items or []:
+            # Try the most likely keys first.
+            orig = (
+                item.get("original_path")
+                or item.get("original")
+                or item.get("source_path")
+                or item.get("path")
+                or ""
+            )
+            if not isinstance(orig, str) or not orig:
+                continue
+            o = orig.lower().rstrip("\\/")
+            # Exact match OR original sits under the scanned folder.
+            if o == scanned_str or o.startswith(scanned_str + "\\") \
+                    or o.startswith(scanned_str + "/"):
+                kept.append(item)
+        return kept
 
     def _consolidate_restore(self,
                              dest_root: Path,
