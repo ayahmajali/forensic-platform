@@ -581,19 +581,28 @@ def run_photorec(
     # If a real case needs an obscure format (Quake save, Lotus 1-2-3,
     # ELF binary, etc.) the operator can run a second pass with the full
     # set by setting the PHOTOREC_ALL_TYPES environment variable.
-    # IMPORTANT: every name below must be a valid PhotoRec format identifier
-    # (verified against `photorec_win.exe /list_files` output for 7.3-WIP).
-    # Using an unknown name (e.g. "tiff" — PhotoRec calls it "tif") causes
-    # the cmd parser to abort with "Syntax error in command line" and the
-    # whole scan dies before reading a single sector. Stick to the short,
-    # canonical names. If you want to add a format, run `/list_files`
-    # first and copy the exact identifier.
+    # IMPORTANT: every name below must be a valid PhotoRec format identifier.
+    # Using an unknown name (e.g. "tiff" — PhotoRec calls it "tif"; or
+    # "docx" — PhotoRec relies on the "zip" signature because .docx is
+    # actually a ZIP archive) causes the cmd parser to abort with
+    # "Syntax error in command line" and the whole scan dies before
+    # reading a single sector.
+    #
+    # The list below has been validated against PhotoRec 7.3-WIP. Modern
+    # Office formats (.docx, .xlsx, .pptx) are recovered through the zip
+    # signature; PowerPoint Open XML, Word Open XML, and Excel Open XML
+    # all show up in the recup_dir as .zip files which can be renamed
+    # with the correct extension after recovery.
     _DEMO_TYPES = (
-        "jpg", "png", "gif", "bmp", "tif",                # images
-        "pdf", "doc", "docx", "xls", "xlsx",              # office docs
-        "ppt", "pptx", "txt", "rtf",
-        "zip", "rar", "7z", "tar", "gz",                  # archives
-        "mp3", "mp4", "avi", "mov", "wav",                # media
+        # Images
+        "jpg", "png", "gif", "bmp", "tif",
+        # Office documents — binary formats (legacy Office '97-2003)
+        "pdf", "doc", "xls", "ppt", "rtf", "txt",
+        # Archives — also catches modern Office Open XML (.docx, .xlsx,
+        # .pptx) since those are ZIP containers under the hood
+        "zip", "rar", "7z", "gz", "tar",
+        # Media
+        "mp3", "mp4", "avi", "mov", "wav",
     )
     # Mode resolution: explicit `mode` arg from the GUI wins, then the
     # env var override (handy for CLI users), then default to "fast".
@@ -805,8 +814,61 @@ def run_photorec(
                     except OSError:
                         continue
 
+    # Silent-failure detection: PhotoRec sometimes exits with code 0
+    # even though it didn't actually scan, because of an error during
+    # setup (bad cmd-line arg, missing terminfo, locked device, etc.).
+    # Without this check the agent would just say "0 files recovered"
+    # with no explanation. Pattern-match the log against a list of
+    # known killer messages and surface them as proper errors.
+    silent_failure: Optional[str] = None
+    if photorec_log_text and not recovered:
+        SILENT_FAIL_PATTERNS = [
+            (
+                "Syntax error in command line",
+                "PhotoRec rejected our file-type list. One of the format "
+                "identifiers we passed isn't recognised by this PhotoRec "
+                "build. Look for the line starting 'Syntax error in "
+                "command line:' in the log below — the FIRST token after "
+                "it is the unrecognised identifier. Remove it from the "
+                "_DEMO_TYPES tuple in agent/recovery.py and rebuild.",
+            ),
+            (
+                "Terminfo file is missing",
+                "PhotoRec couldn't find its ncurses terminfo file. The "
+                "build script bundles vendor/testdisk/63/cygwin via "
+                "--add-data; if you're seeing this, that bundling step "
+                "didn't run. Re-run build_windows.bat and check the "
+                "console output for the --add-data line.",
+            ),
+            (
+                "Cannot open",
+                "PhotoRec couldn't open the target device. Common causes: "
+                "the agent isn't running as administrator (right-click "
+                "the .exe → Run as administrator), BitLocker is "
+                "encrypting the drive, or another process has an "
+                "exclusive lock on it.",
+            ),
+            (
+                "No file system found",
+                "PhotoRec scanned the device but couldn't recognise the "
+                "filesystem layout. This is rare on real drives — usually "
+                "means the device path resolved to something unusual (a "
+                "RAID member, an empty/uninitialised disk, etc.).",
+            ),
+        ]
+        for pattern, explanation in SILENT_FAIL_PATTERNS:
+            if pattern in photorec_log_text:
+                silent_failure = (
+                    f"PhotoRec finished but did NOT recover any files.\n\n"
+                    f"Detected: \"{pattern}\".\n\n{explanation}"
+                )
+                break
+
     error_msg = ""
-    if proc.returncode != 0 and not recovered:
+    if silent_failure:
+        # Bubble up the real cause even when PhotoRec exited 0.
+        error_msg = silent_failure
+    elif proc.returncode != 0 and not recovered:
         sysname = platform.system()
         if sysname == "Windows":
             error_msg = (
@@ -829,18 +891,21 @@ def run_photorec(
                 f"re-launch the agent with `sudo`."
             )
 
-        # If PhotoRec wrote its own diagnostic log, show the tail to the
-        # user — that's where the actual root cause (e.g. "fopen failed
-        # for \\.\PhysicalDrive0", "no partition found", etc.) is going
-        # to be. Tail only because the full file can be megabytes.
-        if photorec_log_text.strip():
-            tail = "\n".join(photorec_log_text.splitlines()[-25:])
-            error_msg += (
-                "\n\nPhotoRec's own log (tail, full copy at "
-                f"{photorec_log_path}):\n"
-                "────────────────────────────────────────\n"
-                f"{tail}"
-            )
+    # If we have any error message AND PhotoRec wrote its own diagnostic
+    # log, append the tail of the log so the operator can see the actual
+    # root cause (e.g. "Syntax error in command line: docx,enable,…",
+    # "fopen failed for \\.\\PhysicalDrive0", "no partition found", …).
+    # Tail only because the full file can be megabytes on a real scan.
+    # This now runs for BOTH silent failures and non-zero exits — the
+    # log is always the most informative thing we can show.
+    if error_msg and photorec_log_text.strip():
+        tail = "\n".join(photorec_log_text.splitlines()[-25:])
+        error_msg += (
+            "\n\nPhotoRec's own log (tail, full copy at "
+            f"{photorec_log_path}):\n"
+            "────────────────────────────────────────\n"
+            f"{tail}"
+        )
 
     # Combine our captured stdout/stderr with PhotoRec's own log file
     # so the GUI's Deep Recovery tab gets one consolidated text blob.
