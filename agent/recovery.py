@@ -593,22 +593,27 @@ def run_photorec(
     # signature; PowerPoint Open XML, Word Open XML, and Excel Open XML
     # all show up in the recup_dir as .zip files which can be renamed
     # with the correct extension after recovery.
+    # NOTE: every identifier below has been EMPIRICALLY VERIFIED against
+    # PhotoRec 7.3-WIP by reading photorec.log and watching what it
+    # accepted before erroring. Adding others (rtf, txt, tar, mp4, avi,
+    # mov, wav, xls, ppt, docx, etc.) causes "Syntax error in command
+    # line" and aborts the entire scan — PhotoRec's CLI parser is
+    # strict and there's no warning for unknown tokens.
     _DEMO_TYPES = (
         # Images
         "jpg", "png", "gif", "bmp", "tif",
         # Documents — `doc` is the OLE2 compound-document signature that
-        # covers ALL legacy Office (.doc, .xls, .ppt). PhotoRec does NOT
-        # have separate identifiers for `rtf` or `txt` (text formats lack
-        # a strong magic-number signature) or for `xls`/`ppt`/`docx`/etc.
+        # covers ALL legacy Office (.doc, .xls, .ppt) under one identifier
         "pdf", "doc",
-        # Archives — also catches modern Office Open XML (.docx, .xlsx,
-        # .pptx) since those are ZIP containers under the hood. Recovered
-        # files appear as f0001234.zip and can be renamed by file content.
-        # `tar` is excluded because its signature lives at byte offset 257
-        # and PhotoRec 7.3-WIP doesn't ship a signature for plain tar.
+        # Archives — `zip` ALSO catches modern Office Open XML files
+        # (.docx, .xlsx, .pptx) since those are ZIP containers underneath.
+        # Recovered files come out as f0001234.zip and can be renamed by
+        # peeking at the content (each contains [Content_Types].xml).
         "zip", "rar", "7z", "gz", "bz2",
-        # Media
-        "mp3", "mp4", "avi", "mov", "wav",
+        # Media — only mp3 is verified accepted in 7.3-WIP. mp4/avi/mov/
+        # wav use different internal identifiers in this build (likely
+        # m4v / mpg / riff family). Skip until/unless we need them.
+        "mp3",
     )
     # Mode resolution: explicit `mode` arg from the GUI wins, then the
     # env var override (handy for CLI users), then default to "fast".
