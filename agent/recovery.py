@@ -597,15 +597,16 @@ def run_photorec(
         # Images
         "jpg", "png", "gif", "bmp", "tif",
         # Documents — `doc` is the OLE2 compound-document signature that
-        # covers ALL legacy Office (.doc, .xls, .ppt) since they share the
-        # same container format. PhotoRec does NOT have separate `xls`
-        # or `ppt` identifiers; passing them causes "Syntax error in
-        # command line".
-        "pdf", "doc", "rtf", "txt",
+        # covers ALL legacy Office (.doc, .xls, .ppt). PhotoRec does NOT
+        # have separate identifiers for `rtf` or `txt` (text formats lack
+        # a strong magic-number signature) or for `xls`/`ppt`/`docx`/etc.
+        "pdf", "doc",
         # Archives — also catches modern Office Open XML (.docx, .xlsx,
         # .pptx) since those are ZIP containers under the hood. Recovered
         # files appear as f0001234.zip and can be renamed by file content.
-        "zip", "rar", "7z", "gz", "tar",
+        # `tar` is excluded because its signature lives at byte offset 257
+        # and PhotoRec 7.3-WIP doesn't ship a signature for plain tar.
+        "zip", "rar", "7z", "gz", "bz2",
         # Media
         "mp3", "mp4", "avi", "mov", "wav",
     )
