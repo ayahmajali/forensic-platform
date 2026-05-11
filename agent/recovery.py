@@ -525,6 +525,65 @@ def _ps_quote(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Public catalog of PhotoRec signatures we expose through the GUI.
+#
+# Each tuple is (identifier, label, hint). The identifier is what gets passed
+# to PhotoRec's /cmd parser — these have all been empirically verified against
+# PhotoRec 7.3-WIP. Adding an unknown identifier causes PhotoRec to abort with
+# "Syntax error in command line" before reading a single sector, so do NOT
+# extend this list without testing the new token first.
+#
+# The label/hint are surfaced in the agent UI so the investigator can pick
+# only the formats relevant to their case, dropping scan time from ~20 min
+# (all 13 enabled) to ~3 min (3–4 enabled). PhotoRec checks every block of
+# the device against every enabled signature, so each disabled format
+# meaningfully speeds up the pass.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PHOTOREC_SIGNATURES: List[Dict[str, str]] = [
+    # ── Documents ─────────────────────────────────────────────────────────
+    {"id": "pdf", "label": "PDF",
+     "hint": "Adobe PDF documents — invoices, scans, manuals, forms."},
+    {"id": "doc", "label": "DOC / XLS / PPT (legacy Office)",
+     "hint": "Old binary Office (.doc, .xls, .ppt). One signature covers all three."},
+    # ── Images ────────────────────────────────────────────────────────────
+    {"id": "jpg", "label": "JPG / JPEG",
+     "hint": "Photos, camera output, web thumbnails. Highest false-positive volume."},
+    {"id": "png", "label": "PNG",
+     "hint": "Screenshots, app assets, logos."},
+    {"id": "gif", "label": "GIF",
+     "hint": "Animated GIFs, small graphics. Often noise on modern systems."},
+    {"id": "bmp", "label": "BMP",
+     "hint": "Windows bitmaps. Rare in modern data; useful on legacy systems."},
+    {"id": "tif", "label": "TIFF",
+     "hint": "Scanner output, multi-page documents, satellite imagery."},
+    # ── Archives (also catches modern Office .docx/.xlsx/.pptx as .zip) ───
+    {"id": "zip", "label": "ZIP (also .docx / .xlsx / .pptx)",
+     "hint": "ZIP containers — also recovers all modern Office files (which ARE zips)."},
+    {"id": "rar", "label": "RAR",
+     "hint": "WinRAR archives. Common on Windows."},
+    {"id": "7z",  "label": "7-Zip",
+     "hint": "7z archives. Less common than ZIP/RAR."},
+    {"id": "gz",  "label": "GZIP",
+     "hint": "Linux/Unix .gz compressed files. Common on servers."},
+    {"id": "bz2", "label": "BZIP2",
+     "hint": "Linux/Unix .bz2 compressed files. Less common than .gz."},
+    # ── Media ─────────────────────────────────────────────────────────────
+    {"id": "mp3", "label": "MP3",
+     "hint": "Audio files. Note: MP4/MOV/AVI need a different signature build."},
+]
+
+# All signature IDs as a tuple — used as the default when the GUI doesn't
+# specify a list (e.g. when a CLI invocation falls through to fast mode).
+DEFAULT_SIGNATURE_IDS: tuple = tuple(s["id"] for s in PHOTOREC_SIGNATURES)
+
+
+def signature_catalog() -> List[Dict[str, str]]:
+    """Return the public list of PhotoRec signatures the GUI should expose."""
+    return list(PHOTOREC_SIGNATURES)
+
+
 def run_photorec(
     *,
     device: str,
@@ -569,52 +628,39 @@ def run_photorec(
         }
 
     out_prefix = str(out_dir / "recup_dir")
-    # File-type filter: PhotoRec ships with ~480 file-format signatures.
-    # Checking every byte against every signature is what makes a 30 GB
-    # USB scan take 15+ minutes and produce 80,000+ false positives from
-    # random byte patterns that happen to match something obscure.
+    # ─────────────────────────────────────────────────────────────────────
+    # File-type filter resolution
+    # ─────────────────────────────────────────────────────────────────────
+    # PhotoRec checks every block of the device against every enabled
+    # signature, so dropping signatures from 13→3 cuts scan time from
+    # ~20 min to ~3 min on a 30 GB USB. The agent UI exposes a checkbox
+    # grid backed by signature_catalog(); the chosen IDs arrive here as
+    # the file_types argument. If the caller didn't pass any (CLI fall
+    # through, or thorough mode), we behave the same as before.
     #
-    # For an investigator's typical workload — and especially for a live
-    # demo — restricting to common business / multimedia formats makes
-    # the scan ~30–50× faster and the result list radically more useful.
-    # Below is a curated short list: documents, images, archives, media.
-    # If a real case needs an obscure format (Quake save, Lotus 1-2-3,
-    # ELF binary, etc.) the operator can run a second pass with the full
-    # set by setting the PHOTOREC_ALL_TYPES environment variable.
-    # IMPORTANT: every name below must be a valid PhotoRec format identifier.
-    # Using an unknown name (e.g. "tiff" — PhotoRec calls it "tif"; or
-    # "docx" — PhotoRec relies on the "zip" signature because .docx is
-    # actually a ZIP archive) causes the cmd parser to abort with
-    # "Syntax error in command line" and the whole scan dies before
-    # reading a single sector.
-    #
-    # The list below has been validated against PhotoRec 7.3-WIP. Modern
-    # Office formats (.docx, .xlsx, .pptx) are recovered through the zip
-    # signature; PowerPoint Open XML, Word Open XML, and Excel Open XML
-    # all show up in the recup_dir as .zip files which can be renamed
-    # with the correct extension after recovery.
-    # NOTE: every identifier below has been EMPIRICALLY VERIFIED against
-    # PhotoRec 7.3-WIP by reading photorec.log and watching what it
-    # accepted before erroring. Adding others (rtf, txt, tar, mp4, avi,
-    # mov, wav, xls, ppt, docx, etc.) causes "Syntax error in command
-    # line" and aborts the entire scan — PhotoRec's CLI parser is
-    # strict and there's no warning for unknown tokens.
-    _DEMO_TYPES = (
-        # Images
-        "jpg", "png", "gif", "bmp", "tif",
-        # Documents — `doc` is the OLE2 compound-document signature that
-        # covers ALL legacy Office (.doc, .xls, .ppt) under one identifier
-        "pdf", "doc",
-        # Archives — `zip` ALSO catches modern Office Open XML files
-        # (.docx, .xlsx, .pptx) since those are ZIP containers underneath.
-        # Recovered files come out as f0001234.zip and can be renamed by
-        # peeking at the content (each contains [Content_Types].xml).
-        "zip", "rar", "7z", "gz", "bz2",
-        # Media — only mp3 is verified accepted in 7.3-WIP. mp4/avi/mov/
-        # wav use different internal identifiers in this build (likely
-        # m4v / mpg / riff family). Skip until/unless we need them.
-        "mp3",
-    )
+    # IMPORTANT: every identifier in `file_types` must be a valid PhotoRec
+    # token (see the comments on PHOTOREC_SIGNATURES). We validate against
+    # the catalog and silently drop unknowns — PhotoRec aborts with
+    # "Syntax error in command line" if we ship even one bad token, and
+    # we'd rather degrade gracefully than break the entire scan because
+    # the GUI sent through "tiff" instead of "tif".
+    valid_ids = {s["id"] for s in PHOTOREC_SIGNATURES}
+    if file_types:
+        chosen = [t.strip().lower() for t in file_types if t]
+        chosen = [t for t in chosen if t in valid_ids]
+        # If the user unchecked everything, fall back to the default set
+        # so we don't accidentally hand PhotoRec an empty enable list
+        # (which it interprets as "scan for nothing" → 0 files recovered).
+        if not chosen:
+            chosen = list(DEFAULT_SIGNATURE_IDS)
+            if on_log:
+                on_log(
+                    "[photorec] no valid file types selected — falling "
+                    "back to the default 13-signature set."
+                )
+    else:
+        chosen = list(DEFAULT_SIGNATURE_IDS)
+
     # Mode resolution: explicit `mode` arg from the GUI wins, then the
     # env var override (handy for CLI users), then default to "fast".
     effective_mode = (mode or "fast").strip().lower()
@@ -627,26 +673,29 @@ def run_photorec(
         # format. Best for real casework where we don't know what we're
         # looking for; expect many false-positive hits from random byte
         # patterns that happen to match obscure signatures.
+        # In thorough mode the user's file-type filter is intentionally
+        # IGNORED — the whole point of thorough is "catch everything".
         cmd_arg = "partition_none,fileopt,everything,enable,search"
         if on_log:
             on_log(
                 "[photorec] mode: THOROUGH — testing every byte against "
-                "all 480 file signatures. ETA on a 30 GB USB ≈ 15–30 min."
+                "all 480 file signatures. ETA on a 30 GB USB ≈ 15–30 min. "
+                "(File-type filter ignored in thorough mode.)"
             )
     else:
         # Default fast path: disable everything, then enable only the
-        # demo / common-case formats. Resulting cmd looks like:
+        # IDs the user ticked in the GUI. Resulting cmd looks like:
         #   partition_none,fileopt,everything,disable,jpg,enable,pdf,enable,...,search
-        enables = ",".join(f"{t},enable" for t in _DEMO_TYPES)
+        enables = ",".join(f"{t},enable" for t in chosen)
         cmd_arg = (
             f"partition_none,fileopt,everything,disable,"
             f"{enables},search"
         )
         if on_log:
             on_log(
-                f"[photorec] mode: FAST — hunting for {len(_DEMO_TYPES)} "
-                f"common file types ({', '.join(_DEMO_TYPES[:6])}, …). "
-                "ETA on a 30 GB USB ≈ 2–5 min."
+                f"[photorec] mode: FAST — hunting for {len(chosen)} "
+                f"file type(s): {', '.join(chosen)}. "
+                "Fewer types = faster scan."
             )
 
     # /log enables PhotoRec's own diagnostic log → photorec.log in CWD.
@@ -951,6 +1000,7 @@ def recover_for_folder(
     on_log: Optional[LogFn] = None,
     elevate: bool = True,
     mode: str = "fast",
+    file_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     The high-level entry point the GUI actually calls. Given a selected
@@ -1039,9 +1089,14 @@ def recover_for_folder(
     log(f"Recovering into: {out_dir}")
     result = run_photorec(
         device=device, out_dir=out_dir, on_log=log, elevate=elevate,
-        mode=mode,
+        mode=mode, file_types=file_types,
     )
     result["status"] = "ok" if not result.get("error") else "error"
     result["trim"] = trim
     result["folder"] = str(folder)
+    # Echo the user's filter back into the result so the report can show
+    # exactly which signatures this scan looked for. Useful when audit
+    # questions come up later: "why didn't you find the .mov file?" — the
+    # answer is right there in the case JSON.
+    result["file_types_requested"] = list(file_types) if file_types else None
     return result

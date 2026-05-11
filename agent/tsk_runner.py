@@ -320,6 +320,7 @@ class LocalTSKRunner:
         *,
         on_log: Optional[Callable[[str], None]] = None,
         deleted_only: bool = True,
+        file_extensions: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Run the full TSK pipeline and recover deleted files.
 
@@ -335,6 +336,14 @@ class LocalTSKRunner:
             When True, invoke ``tsk_recover -e`` so *only* unallocated /
             deleted files are extracted (the common case). When False,
             extract every file the filesystem can see.
+        file_extensions
+            Optional list of lowercase extensions WITHOUT the dot (e.g.
+            ``["pdf", "jpg", "docx"]``). When supplied, the report's
+            ``recovered_files`` list is filtered to only entries whose
+            extension matches. ``tsk_recover`` itself doesn't support
+            filtering, so we recover everything and post-filter — the
+            full set still ends up on disk for the investigator who
+            wants to inspect it manually.
         """
         log = on_log or (lambda _msg: None)
 
@@ -410,7 +419,17 @@ class LocalTSKRunner:
         result["tsk_recover_returncode"] = rec_rc
 
         # 5. Walk the output folder to tally what was actually recovered.
+        # Normalise the user's extension filter into a set of dot-prefixed
+        # lowercase tokens so the membership test below stays cheap.
+        ext_filter: Optional[set] = None
+        if file_extensions:
+            ext_filter = {
+                ("." + e.lstrip(".")).lower()
+                for e in file_extensions if e
+            }
+
         recovered_paths: List[Dict[str, Any]] = []
+        skipped_by_filter = 0
         for root, _dirs, files in os.walk(str(output_dir)):
             for fname in files:
                 fpath = Path(root) / fname
@@ -422,16 +441,51 @@ class LocalTSKRunner:
                     rel = fpath.relative_to(output_dir)
                 except ValueError:
                     rel = fpath
+                # Apply the user's file-type filter if one was supplied.
+                # We keep the file on disk regardless — only the report
+                # entries are filtered. That way the investigator can
+                # still browse the full recovery folder if they realise
+                # later they want a wider net.
+                if ext_filter and fpath.suffix.lower() not in ext_filter:
+                    skipped_by_filter += 1
+                    continue
                 recovered_paths.append({
                     "name": fname,
                     "relative_path": str(rel).replace("\\", "/"),
                     "absolute_path": str(fpath),
                     "size": size,
+                    "extension": fpath.suffix.lower(),
                 })
 
         result["recovered_files"] = recovered_paths
         result["recovered_count"] = len(recovered_paths)
-        log(f"  → extracted {len(recovered_paths)} file(s) to {output_dir}")
+        result["file_types_requested"] = (
+            sorted(ext_filter) if ext_filter else None
+        )
+        result["filtered_out_count"] = skipped_by_filter
+        if ext_filter:
+            log(f"  → extracted {len(recovered_paths)} matching file(s) "
+                f"({skipped_by_filter} other(s) filtered out by extension)")
+        else:
+            log(f"  → extracted {len(recovered_paths)} file(s) to {output_dir}")
+
+        # Build a forensic timeline of deleted entries — enough to drive
+        # the "Timeline" view in the case report. Each event carries the
+        # file's path, the event type (deleted), and the inode for any
+        # follow-up icat extraction. We deliberately don't shell out to
+        # mactime here — all the metadata we need is already in the fls
+        # output, and avoiding another 30-second subprocess on a real
+        # image keeps the agent responsive.
+        timeline: List[Dict[str, Any]] = []
+        for d in deleted_entries:
+            timeline.append({
+                "kind": "deleted",
+                "path": d.get("name"),
+                "inode": d.get("inode"),
+                "type": d.get("type"),
+                "source": "fls -rd",
+            })
+        result["timeline"] = timeline
 
         # Summary block the GUI can show verbatim.
         result["summary"] = {
@@ -440,7 +494,9 @@ class LocalTSKRunner:
             "fs_type": result["fsstat"].get("fs_type", "unknown"),
             "deleted_total": len(deleted_entries),
             "recovered_total": len(recovered_paths),
+            "filtered_out_total": skipped_by_filter,
             "output_dir": str(output_dir),
+            "timeline_events": len(timeline),
         }
         return result
 

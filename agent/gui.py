@@ -476,17 +476,51 @@ class ForensicAgentApp(ctk.CTk):
 
         # Tk variables — can only live after the root window is created.
         self._include_browsers = ctk.BooleanVar(value=False)
-        self._recover_deleted = ctk.BooleanVar(value=True)
         self._upload_evidence = ctk.BooleanVar(value=False)
-        # Deep recovery uses PhotoRec on the raw block device. It is OFF by
-        # default because (a) it is slow and (b) it pops a system admin
-        # prompt (Touch ID / UAC / PolicyKit). The investigator opts in.
-        self._deep_recover = ctk.BooleanVar(value=False)
-        # PhotoRec scan mode — "fast" hunts for ~30 common file types in a
-        # few minutes, "thorough" tests every byte against all 480 PhotoRec
-        # signatures and takes 15–30 min on a 30 GB USB. Default to fast
-        # because that's what an investigator wants 95% of the time.
+
+        # ── Recovery configuration (re-designed) ──────────────────────────
+        # The investigator picks an explicit tool now instead of two
+        # half-overlapping checkboxes:
+        #
+        #   "tsk"      — only Sleuth Kit. Preserves filenames; only finds
+        #                files the filesystem still tracks (recently-deleted
+        #                NTFS/ext4 entries, before the journal rotates).
+        #                Inputs: any disk image (.dd/.e01) inside the folder,
+        #                or — on Windows — the raw block device backing the
+        #                folder when no image is present.
+        #
+        #   "photorec" — only PhotoRec. Signature carving on the raw block
+        #                device backing the folder. Recovers files even
+        #                after Recycle Bin emptied. Loses original names.
+        #
+        #   "both"     — run both pipelines and merge results. Default,
+        #                because it gives the most complete picture and the
+        #                two tools complement each other.
+        #
+        # We also accept a "none" sentinel so power-users can skip recovery
+        # entirely — the agent then just hashes + lists files without
+        # touching disk-image internals or raw devices.
+        self._recovery_tool = ctk.StringVar(value="both")
+
+        # PhotoRec scan mode — "fast" honours the user's signature picks,
+        # "thorough" enables ALL 480 signatures (file-type filter ignored).
         self._deep_mode = ctk.StringVar(value="fast")
+
+        # File-type signature picks. One BooleanVar per PhotoRec signature
+        # — defaults to all-on so an investigator who wants the historical
+        # "scan for everything common" behaviour gets it without ticking
+        # boxes. The list of signatures is sourced from recovery.py so it
+        # stays in sync with the validated PhotoRec catalog.
+        self._signature_vars: Dict[str, ctk.BooleanVar] = {}
+        try:
+            _rec_mod = _load_recovery()
+            _catalog = _rec_mod.signature_catalog()
+        except Exception:  # pragma: no cover — defensive fall-back
+            _catalog = []
+        for sig in _catalog:
+            self._signature_vars[sig["id"]] = ctk.BooleanVar(value=True)
+        # Cache the catalog itself so _build_signature_grid can render it.
+        self._signature_catalog: List[Dict[str, str]] = _catalog
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -658,9 +692,10 @@ class ForensicAgentApp(ctk.CTk):
 
         self._build_header(inner, row=0)
         self._build_card_evidence(inner, row=1)
-        self._build_card_run(inner, row=2)
-        self._build_card_results(inner, row=3)
-        self._build_card_submit(inner, row=4)
+        self._build_card_recovery(inner, row=2)
+        self._build_card_run(inner, row=3)
+        self._build_card_results(inner, row=4)
+        self._build_card_submit(inner, row=5)
 
     def _build_header(self, parent, *, row: int) -> None:
         hdr = ctk.CTkFrame(parent, fg_color="transparent")
@@ -762,86 +797,190 @@ class ForensicAgentApp(ctk.CTk):
                 text_color=CLR_TEXT_DIM, anchor="w",
             ).pack(side="left", padx=(8, 0))
 
-        # Options grid — checkboxes with explanations
+        # ── Privacy / browser-history toggle ──────────────────────────────
+        # Single full-width row now that recovery has its own dedicated
+        # card below. This is genuinely orthogonal — browser history
+        # extraction has nothing to do with deleted-file recovery.
         opts = ctk.CTkFrame(body, fg_color="transparent")
         opts.pack(fill="x", pady=(20, 0))
         opts.grid_columnconfigure(0, weight=1)
-        opts.grid_columnconfigure(1, weight=1)
-
         self._option_row(
             opts, row=0, column=0,
-            title="Recover deleted files",
-            detail="Run Sleuth Kit on any disk image inside the folder AND "
-                   "enumerate the OS Trash / Recycle Bin. Carved bytes are "
-                   "written to Desktop / TheDeletedFiles.",
-            variable=self._recover_deleted,
-        )
-        self._option_row(
-            opts, row=0, column=1,
             title="Include browser history",
             detail="Parse Chrome, Edge, Firefox, Opera, Safari, Brave, Vivaldi "
-                   "and Arc history databases. Off by default for privacy.",
+                   "and Arc history databases. Off by default for privacy. "
+                   "When ticked the agent enumerates every browser profile on "
+                   "the host, not only the ones inside the selected folder.",
             variable=self._include_browsers,
         )
 
-        # ── Deep recovery (PhotoRec) — wide, full-width row ────────────────
-        # Distinct from "Recover deleted files" above: this one operates on
-        # the *raw block device* backing the folder, so it can recover files
-        # that were deleted AND emptied from the Recycle Bin. It needs admin
-        # rights — we'll pop the native OS prompt (Touch ID on Mac, UAC on
-        # Windows, PolicyKit on Linux), no terminal/sudo required.
-        deep_card = ctk.CTkFrame(
-            opts, fg_color=CLR_SURFACE_2, corner_radius=10,
+    # ── Card: Recovery Configuration (NEW) ──────────────────────────────
+    def _build_card_recovery(self, parent, *, row: int) -> None:
+        """The investigator picks WHICH recovery tool to run and WHICH
+        file types to look for. Built as its own card so the trade-offs
+        between Sleuth Kit and PhotoRec are obvious — the prior version
+        smuggled them into two half-related checkboxes inside Evidence."""
+        card = self._card(parent, row=row)
+        self._card_header(
+            card, step="2", title="Recovery Configuration",
+            subtitle=(
+                "Choose how the agent should hunt for deleted files. The two "
+                "tools below are complementary, not redundant — Sleuth Kit "
+                "preserves original filenames but only sees files the "
+                "filesystem still tracks; PhotoRec ignores the filesystem "
+                "and carves files by signature, going deeper but losing "
+                "names. Most cases call for both."
+            ),
+        )
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="x", padx=28, pady=(0, 24))
+
+        # ── (1) RECOVERY TOOL — three radio cards ─────────────────────────
+        ctk.CTkLabel(
+            body, text="RECOVERY TOOL",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w", pady=(0, 8))
+
+        tool_grid = ctk.CTkFrame(body, fg_color="transparent")
+        tool_grid.pack(fill="x")
+        tool_grid.grid_columnconfigure(0, weight=1)
+        tool_grid.grid_columnconfigure(1, weight=1)
+        tool_grid.grid_columnconfigure(2, weight=1)
+
+        self._build_tool_card(
+            tool_grid, column=0, value="tsk",
+            title="Sleuth Kit",
+            badge="KEEPS NAMES",
+            badge_color=CLR_INFO,
+            detail=(
+                "Forensic toolkit (mmls + fsstat + fls + tsk_recover). "
+                "Recovers deleted files WITH their original filenames "
+                "and folder paths intact. Works on disk images "
+                "(.dd / .e01 / .raw) inside the selected folder.\n\n"
+                "Limitation: only finds files whose filesystem metadata "
+                "is still present. Once the filesystem journal rotates "
+                "or the MFT entry is overwritten, those files become "
+                "invisible to Sleuth Kit — switch to PhotoRec for those."
+            ),
+        )
+        self._build_tool_card(
+            tool_grid, column=1, value="photorec",
+            title="PhotoRec",
+            badge="DEEPER",
+            badge_color=CLR_WARN,
+            detail=(
+                "Signature-based file carver. Reads the raw block device "
+                "and reconstructs files purely from header / footer "
+                "patterns. Recovers files even after Recycle Bin / Trash "
+                "is emptied or the partition is formatted.\n\n"
+                "Trade-off: original filenames are GONE — recovered "
+                "files come out as f0010880.pdf, f0030856.pptx, etc. "
+                "Pick this when the suspect tried hard to erase tracks."
+            ),
+        )
+        self._build_tool_card(
+            tool_grid, column=2, value="both",
+            title="Both (recommended)",
+            badge="MOST COMPLETE",
+            badge_color=CLR_SUCCESS,
+            detail=(
+                "Run Sleuth Kit first to recover everything we can with "
+                "names intact, then PhotoRec to carve the rest from raw "
+                "blocks. Highest recall — gives the investigator both "
+                "the named-file evidence (good for court) AND the "
+                "carved fragments (good for reconstructing intent)."
+            ),
+        )
+
+        # ── (2) ADMIN-PROMPT NOTICE ───────────────────────────────────────
+        notice = ctk.CTkFrame(
+            body, fg_color=CLR_ELEVATED, corner_radius=8,
             border_color=CLR_DIVIDER, border_width=1,
         )
-        deep_card.grid(row=1, column=0, columnspan=2,
-                       sticky="ew", pady=(12, 0))
-        head = ctk.CTkFrame(deep_card, fg_color="transparent")
-        head.pack(fill="x", padx=18, pady=(14, 4))
-        ctk.CTkCheckBox(
-            head, text="Deep recover (PhotoRec, raw-disk carving)",
-            variable=self._deep_recover,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=CLR_TEXT,
-            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
-            checkbox_width=20, checkbox_height=20,
-        ).pack(side="left")
+        notice.pack(fill="x", pady=(14, 0))
         ctk.CTkLabel(
-            head, text="ADMIN REQUIRED",
-            font=ctk.CTkFont(size=9, weight="bold"),
-            text_color=CLR_WARN, fg_color=CLR_ELEVATED,
-            corner_radius=999, padx=8, pady=2,
-        ).pack(side="left", padx=(12, 0))
+            notice, text="🔐  ADMIN REQUIRED",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_WARN,
+        ).pack(anchor="w", padx=12, pady=(8, 0))
         ctk.CTkLabel(
-            deep_card,
+            notice,
             text=(
-                "Reads the raw block device backing the selected folder and "
-                "carves deleted files by signature — recovers files even "
-                "after the Recycle Bin / Trash has been emptied. The system "
-                "will prompt you for your password (Touch ID on Mac, UAC on "
-                "Windows). Recovered files are written to "
-                "~/Desktop/TheDeletedFiles/PhotoRec-<timestamp>/.\n\n"
-                "Note: on modern SSDs (M-series Macs, most NVMe laptops), "
-                "TRIM may have already physically zeroed deleted blocks — "
-                "the tool will warn you when this is the case."
+                "PhotoRec needs raw block-device access. The agent will "
+                "request elevation via the native OS prompt — Touch ID / "
+                "password on macOS, UAC on Windows, PolicyKit on Linux. "
+                "No terminal sudo required."
             ),
             font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
             justify="left", wraplength=820,
-        ).pack(anchor="w", padx=18, pady=(0, 12))
+        ).pack(anchor="w", padx=12, pady=(0, 10))
 
-        # ── Mode selector: Fast vs Thorough ───────────────────────────────
-        # Two side-by-side mode cards inside the deep_recover panel. Picked
-        # design over a CTkSegmentedButton because we want each mode to have
-        # its own readable description + ETA hint, not just a one-word label.
-        mode_section = ctk.CTkFrame(deep_card, fg_color="transparent")
-        mode_section.pack(fill="x", padx=18, pady=(0, 16))
+        # ── (3) FILE TYPE PICKER ──────────────────────────────────────────
         ctk.CTkLabel(
-            mode_section, text="SCAN MODE",
+            body, text="FILE TYPES TO RECOVER",
             font=ctk.CTkFont(size=10, weight="bold"),
             text_color=CLR_TEXT_DIM,
-        ).pack(anchor="w", pady=(0, 6))
+        ).pack(anchor="w", pady=(20, 8))
+        ctk.CTkLabel(
+            body,
+            text=(
+                "Tick only the formats your case needs. Each enabled type "
+                "adds work to PhotoRec's per-block check, so trimming the "
+                "list from 13 → 4 cuts a 20 min scan to roughly 5 min. "
+                "Sleuth Kit always recovers everything; the filter only "
+                "trims which entries appear in the report."
+            ),
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=820,
+        ).pack(anchor="w", pady=(0, 10))
 
-        modes_grid = ctk.CTkFrame(mode_section, fg_color="transparent")
+        # "All" / "None" quick toggles
+        toggle_row = ctk.CTkFrame(body, fg_color="transparent")
+        toggle_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkButton(
+            toggle_row, text="Select all", height=28, width=100,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11),
+            command=lambda: self._set_all_signatures(True),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            toggle_row, text="Clear all", height=28, width=100,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11),
+            command=lambda: self._set_all_signatures(False),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            toggle_row, text="Documents only",
+            height=28, width=140,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11),
+            command=lambda: self._set_signature_preset(
+                {"pdf", "doc", "zip"},
+            ),
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            toggle_row, text="Images only",
+            height=28, width=140,
+            fg_color=CLR_ELEVATED, hover_color=CLR_DIVIDER,
+            text_color=CLR_TEXT, font=ctk.CTkFont(size=11),
+            command=lambda: self._set_signature_preset(
+                {"jpg", "png", "gif", "bmp", "tif"},
+            ),
+        ).pack(side="left", padx=(0, 6))
+
+        # The actual checkbox grid — three columns to keep things compact.
+        self._build_signature_grid(body)
+
+        # ── (4) PHOTOREC SCAN MODE — Fast vs Thorough ─────────────────────
+        ctk.CTkLabel(
+            body, text="PHOTOREC SCAN MODE",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=CLR_TEXT_DIM,
+        ).pack(anchor="w", pady=(22, 6))
+
+        modes_grid = ctk.CTkFrame(body, fg_color="transparent")
         modes_grid.pack(fill="x")
         modes_grid.grid_columnconfigure(0, weight=1)
         modes_grid.grid_columnconfigure(1, weight=1)
@@ -853,10 +992,10 @@ class ForensicAgentApp(ctk.CTk):
             badge_color=CLR_SUCCESS,
             eta="~ 2–5 min on a 30 GB USB",
             detail=(
-                "Hunts for ~30 common forensic file types: documents (PDF, "
-                "DOCX, XLSX), images (JPG, PNG, HEIC), media (MP3, MP4, "
-                "MOV), archives (ZIP, RAR, 7Z), and a few more. Best for "
-                "demos and the typical 'find the deleted photo' case."
+                "Honors the file-type filter above. Hunts only for the "
+                "formats you ticked, dropping scan time dramatically vs "
+                "Thorough mode. Best for live demos and most real cases "
+                "where you know roughly what you're looking for."
             ),
         )
         self._build_mode_card(
@@ -866,13 +1005,108 @@ class ForensicAgentApp(ctk.CTk):
             badge_color=CLR_WARN,
             eta="~ 15–30 min on a 30 GB USB",
             detail=(
-                "Tests every byte against PhotoRec's full set of 480 file "
+                "Tests every byte against PhotoRec's full set of 480 "
                 "signatures — including obscure formats like firmware "
-                "images, game saves, and engineering CAD. Use this when "
-                "the case calls for an exotic file type or you want "
-                "maximum recall. Expect many extra false-positive hits."
+                "images, game saves, engineering CAD. Use when the case "
+                "needs an exotic format or maximum recall. The file-type "
+                "filter above is IGNORED in this mode (by design)."
             ),
         )
+
+    def _build_tool_card(
+        self, parent, *, column: int, value: str, title: str, badge: str,
+        badge_color: str, detail: str,
+    ) -> None:
+        """One radio-card representing a recovery tool choice (TSK/PhotoRec/Both)."""
+        # Trailing/leading padding so the three cards have visual breathing
+        # room without the outer column-configure assigning unequal widths.
+        if column == 0:
+            pad = (0, 6)
+        elif column == 2:
+            pad = (6, 0)
+        else:
+            pad = (3, 3)
+
+        card = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE_2, corner_radius=10,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        card.grid(row=0, column=column, sticky="nsew", padx=pad, pady=0)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=14, pady=(14, 4))
+        ctk.CTkRadioButton(
+            head, text=title, variable=self._recovery_tool, value=value,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=CLR_TEXT,
+            fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+            radiobutton_width=18, radiobutton_height=18,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            head, text=badge,
+            font=ctk.CTkFont(size=8, weight="bold"),
+            text_color=badge_color, fg_color=CLR_ELEVATED,
+            corner_radius=999, padx=7, pady=2,
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            card, text=detail,
+            font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+            justify="left", wraplength=240, anchor="w",
+        ).pack(anchor="w", padx=14, pady=(2, 14), fill="x")
+
+    def _build_signature_grid(self, parent) -> None:
+        """Render the PhotoRec file-type signature checkboxes as a 3-column
+        grid. Each row is one signature with a small inline hint."""
+        grid = ctk.CTkFrame(
+            parent, fg_color=CLR_SURFACE_2, corner_radius=10,
+            border_color=CLR_DIVIDER, border_width=1,
+        )
+        grid.pack(fill="x", pady=(2, 0))
+
+        if not self._signature_catalog:
+            ctk.CTkLabel(
+                grid,
+                text=("Could not load PhotoRec signature catalog. The "
+                      "agent will fall back to the default 13-format list."),
+                font=ctk.CTkFont(size=11), text_color=CLR_WARN,
+                wraplength=820, justify="left",
+            ).pack(anchor="w", padx=14, pady=14)
+            return
+
+        inner = ctk.CTkFrame(grid, fg_color="transparent")
+        inner.pack(fill="x", padx=14, pady=14)
+        inner.grid_columnconfigure(0, weight=1)
+        inner.grid_columnconfigure(1, weight=1)
+        inner.grid_columnconfigure(2, weight=1)
+
+        for idx, sig in enumerate(self._signature_catalog):
+            r, c = divmod(idx, 3)
+            cell = ctk.CTkFrame(inner, fg_color="transparent")
+            cell.grid(row=r, column=c, sticky="nw", padx=4, pady=4)
+            ctk.CTkCheckBox(
+                cell, text=sig["label"],
+                variable=self._signature_vars[sig["id"]],
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=CLR_TEXT,
+                fg_color=CLR_ACCENT, hover_color=CLR_ACCENT_H,
+                checkbox_width=18, checkbox_height=18,
+            ).pack(anchor="w")
+            ctk.CTkLabel(
+                cell, text=sig["hint"],
+                font=ctk.CTkFont(size=10), text_color=CLR_MUTED,
+                justify="left", wraplength=240, anchor="w",
+            ).pack(anchor="w", padx=(26, 0), pady=(0, 0))
+
+    def _set_all_signatures(self, value: bool) -> None:
+        """Helper backing the 'Select all' / 'Clear all' buttons."""
+        for var in self._signature_vars.values():
+            var.set(value)
+
+    def _set_signature_preset(self, ids: set) -> None:
+        """Tick only the IDs in `ids`; clear everything else."""
+        for sid, var in self._signature_vars.items():
+            var.set(sid in ids)
 
     def _build_mode_card(
         self, parent, *, column: int, value: str, title: str, badge: str,
@@ -944,10 +1178,11 @@ class ForensicAgentApp(ctk.CTk):
     def _build_card_run(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
         self._card_header(
-            card, step="2", title="Scan",
+            card, step="3", title="Scan",
             subtitle="Hashes every file, surfaces recently modified items, "
-                     "runs Sleuth Kit on any disk image inside the folder, "
-                     "and enumerates the system Trash for deleted files.",
+                     "and runs the recovery tool(s) you picked above. The "
+                     "system Trash / Recycle Bin is always enumerated so "
+                     "you see what's already on the OS-level deleted list.",
         )
 
         body = ctk.CTkFrame(card, fg_color="transparent")
@@ -1006,7 +1241,7 @@ class ForensicAgentApp(ctk.CTk):
     # ── Card: Results (tabbed) ───────────────────────────────────────────
     def _build_card_results(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
-        self._card_header(card, step="3", title="Results",
+        self._card_header(card, step="4", title="Results",
                           subtitle="Summary, modified files (with dates), and recovered "
                                    "deleted files — each on its own tab.")
 
@@ -1025,7 +1260,7 @@ class ForensicAgentApp(ctk.CTk):
     def _build_card_submit(self, parent, *, row: int) -> None:
         card = self._card(parent, row=row)
         self._card_header(
-            card, step="4", title="Publish",
+            card, step="5", title="Publish",
             subtitle="Send the structured findings JSON to the backend and "
                      "receive a Case ID with a shareable report URL plus a "
                      "downloadable PDF.",
@@ -1227,13 +1462,19 @@ class ForensicAgentApp(ctk.CTk):
         self._set_chip("●  Analyzing", CLR_ACCENT)
         self._set_statusbar("Scan in progress…")
 
+        # Snapshot the recovery configuration so the worker has a stable
+        # view even if the user fiddles with checkboxes mid-scan.
+        tool = (self._recovery_tool.get() or "both").strip().lower()
+        signatures = [
+            sid for sid, var in self._signature_vars.items() if var.get()
+        ]
         self._scan_thread = threading.Thread(
             target=self._scan_worker,
             args=(
                 self._selected_folder,
                 bool(self._include_browsers.get()),
-                bool(self._recover_deleted.get()),
-                bool(self._deep_recover.get()),
+                tool,
+                signatures,
                 str(self._deep_mode.get() or "fast"),
             ),
             daemon=True,
@@ -1292,20 +1533,29 @@ class ForensicAgentApp(ctk.CTk):
     # ─────────────────────────────────────────────────────────────────
 
     def _scan_worker(self, root: Path, include_browsers: bool,
-                     recover_deleted: bool, deep_recover: bool = False,
+                     recovery_tool: str = "both",
+                     selected_signatures: Optional[List[str]] = None,
                      deep_mode: str = "fast") -> None:
         """
         Main analysis pipeline. Runs entirely on a background thread.
 
         Phase 1: scanner.py — hashes, metadata, browser history (opt-in).
-        Phase 2: auto-detect disk images inside the folder and run TSK on
-                 each one if the investigator opted into recovery.
+        Phase 2: Sleuth Kit recovery on any disk images inside the folder
+                 (skipped when recovery_tool == "photorec" or "none").
         Phase 3: compute 'recently modified' file list for the summary tab.
-        Phase 4: enumerate the system Trash / Recycle Bin.
-        Phase 5: (opt-in) deep recovery via PhotoRec on the raw block
-                 device backing the folder — recovers files that were
-                 deleted AND emptied from the trash. Pops a native OS
-                 admin prompt because raw-device reads need root / UAC.
+        Phase 4: enumerate the system Trash / Recycle Bin (always).
+        Phase 5: PhotoRec carving on the raw block device backing the
+                 folder (skipped when recovery_tool == "tsk" or "none").
+
+        Parameters
+        ----------
+        recovery_tool
+            One of "tsk", "photorec", "both", or "none" — picks which
+            recovery pipeline(s) run.
+        selected_signatures
+            PhotoRec signature IDs the investigator ticked in the GUI.
+            Also used to filter Sleuth Kit's recovered_files report by
+            extension so both tools surface a consistent file-type slice.
         """
         try:
             scanner = _load_scanner()
@@ -1313,13 +1563,41 @@ class ForensicAgentApp(ctk.CTk):
             self._q.put(("scan_error", {"error": str(e)}))
             return
 
+        # Normalise tool selection so downstream branches are simple booleans.
+        run_tsk = recovery_tool in ("tsk", "both")
+        run_photorec = recovery_tool in ("photorec", "both")
+        any_recovery = run_tsk or run_photorec
+
+        # Selected signatures arrive as PhotoRec IDs (e.g. "pdf", "jpg").
+        # For Sleuth Kit we map a few of those to file extensions so we
+        # can post-filter the recovered_files list. The "doc" PhotoRec
+        # signature covers .doc/.xls/.ppt; "zip" covers modern .docx etc.
+        sig_to_exts: Dict[str, List[str]] = {
+            "pdf": ["pdf"],
+            "doc": ["doc", "xls", "ppt"],
+            "jpg": ["jpg", "jpeg"],
+            "png": ["png"],
+            "gif": ["gif"],
+            "bmp": ["bmp"],
+            "tif": ["tif", "tiff"],
+            "zip": ["zip", "docx", "xlsx", "pptx"],
+            "rar": ["rar"],
+            "7z":  ["7z"],
+            "gz":  ["gz", "tgz"],
+            "bz2": ["bz2"],
+            "mp3": ["mp3"],
+        }
+        tsk_ext_filter: List[str] = []
+        for sid in (selected_signatures or []):
+            tsk_ext_filter.extend(sig_to_exts.get(sid, []))
+
         def on_progress(done: int, total: int) -> None:
             frac = done / total if total else 0
-            # Reserve the last 20 % of the bar for the TSK phase so the bar
-            # doesn't jump back when the second phase starts.
+            # Reserve the last 20 % of the bar for the recovery phases so
+            # the bar doesn't jump back when those start.
             self._q.put(("scan_progress", {
                 "done": done, "total": total,
-                "fraction": min(frac * 0.8, 0.8) if recover_deleted else frac,
+                "fraction": min(frac * 0.8, 0.8) if any_recovery else frac,
             }))
 
         def rar_decision(rar_path, count: int) -> bool:
@@ -1344,11 +1622,24 @@ class ForensicAgentApp(ctk.CTk):
             return
 
         findings["include_browsers"] = include_browsers
+        # Stamp the user's recovery config into the findings so the
+        # backend report shows exactly which tool / signatures were used.
+        findings["recovery_config"] = {
+            "tool":                recovery_tool,
+            "signatures_selected": list(selected_signatures or []),
+            "photorec_mode":       deep_mode,
+            "tool_label":          {
+                "tsk":      "Sleuth Kit only — preserves filenames",
+                "photorec": "PhotoRec only — deeper carving, no names",
+                "both":     "Sleuth Kit + PhotoRec — best of both",
+                "none":     "No recovery — inventory only",
+            }.get(recovery_tool, recovery_tool),
+        }
 
-        # ── Phase 2: auto-detect disk images & run TSK on them ───────
+        # ── Phase 2: Sleuth Kit on any disk images inside the folder ──
         tsk_results: List[Dict[str, Any]] = []
         recovered_total = 0
-        if recover_deleted:
+        if run_tsk:
             disk_images = self._find_disk_images(findings, root)
             if disk_images:
                 try:
@@ -1365,7 +1656,10 @@ class ForensicAgentApp(ctk.CTk):
                             "text": f"[{idx}/{len(disk_images)}] Sleuth Kit on "
                                     f"{img.name}…",
                         }))
-                        result = self._run_tsk_on_image(tsk_runner, img)
+                        result = self._run_tsk_on_image(
+                            tsk_runner, img,
+                            file_extensions=tsk_ext_filter or None,
+                        )
                         tsk_results.append(result)
                         if result.get("recovered_count"):
                             recovered_total += int(result["recovered_count"])
@@ -1373,11 +1667,35 @@ class ForensicAgentApp(ctk.CTk):
                         self._q.put(("disk_log_progress", {
                             "fraction": 0.8 + 0.2 * (idx / len(disk_images)),
                         }))
+            else:
+                # No disk image found — surface a friendly note so the
+                # investigator understands why the TSK tab is empty.
+                # (This is the common case when the user picks a folder
+                # of loose files and chose "Sleuth Kit only".)
+                self._q.put(("disk_log", {
+                    "text": ("Sleuth Kit step: no .dd / .e01 / .raw / .img "
+                             "disk image found inside the selected folder. "
+                             "TSK needs a filesystem image to walk. Pick a "
+                             "folder containing one, or switch the tool to "
+                             "PhotoRec / Both to carve the raw device."),
+                }))
+                tsk_results.append({
+                    "image": "",
+                    "image_name": "—",
+                    "skipped": True,
+                    "skip_reason": (
+                        "Sleuth Kit needs a disk image (.dd / .e01 / .raw "
+                        "/ .img) inside the selected folder. None was "
+                        "found, so TSK was skipped."
+                    ),
+                    "tsk_available": True,
+                })
 
         findings["tsk_disk_analyses"] = tsk_results
         findings["recovered_total"] = recovered_total
-        findings["recover_deleted_requested"] = recover_deleted
-        findings["deep_recover_requested"] = deep_recover
+        # Back-compat keys so any older renderer still works.
+        findings["recover_deleted_requested"] = run_tsk
+        findings["deep_recover_requested"] = run_photorec
 
         # ── Phase 3: recently-modified list ──────────────────────────
         findings["modified_recent"] = self._extract_modified(
@@ -1402,17 +1720,18 @@ class ForensicAgentApp(ctk.CTk):
                 "error": f"trash enumeration failed: {e}",
             })
 
-        # ── Phase 5: deep recovery on the raw block device (opt-in) ───
-        # This is the answer to "I emptied the Recycle Bin and the tool
-        # showed nothing." PhotoRec ignores the filesystem entirely and
-        # carves files out of free space by signature. It needs root /
-        # UAC, which we get via the native OS prompt (Touch ID / UAC /
-        # PolicyKit) — no terminal sudo required.
+        # ── Phase 5: PhotoRec carving on the raw block device ─────────
+        # Runs whenever the user picked PhotoRec or Both. PhotoRec ignores
+        # the filesystem and carves out of free space by signature, which
+        # is the only way to recover files that have been deleted AND
+        # purged from the Recycle Bin. Needs root / UAC, granted via the
+        # native OS prompt (Touch ID / UAC / PolicyKit) — no sudo terminal
+        # gymnastics for the investigator.
         deep_recovery: Dict[str, Any] = {"status": "skipped", "error": ""}
-        if deep_recover:
+        if run_photorec:
             try:
                 self._q.put(("disk_log", {
-                    "text": "Phase 5 — deep recovery via PhotoRec…",
+                    "text": "Phase 5 — PhotoRec carving on raw block device…",
                 }))
                 self._q.put(("disk_log", {
                     "text": "(You may see a system password / UAC prompt.)",
@@ -1425,6 +1744,7 @@ class ForensicAgentApp(ctk.CTk):
 
                 deep_recovery = rec_mod.recover_for_folder(
                     root, on_log=_rec_log, elevate=True, mode=deep_mode,
+                    file_types=list(selected_signatures or []),
                 )
                 # Bonus: feed the recovered count into the top counter so
                 # the headline number reflects PhotoRec's contribution too.
@@ -1474,12 +1794,15 @@ class ForensicAgentApp(ctk.CTk):
             pass
         return list(seen.values())
 
-    def _run_tsk_on_image(self, tsk_runner, image: Path) -> Dict[str, Any]:
+    def _run_tsk_on_image(self, tsk_runner, image: Path,
+                          file_extensions: Optional[List[str]] = None,
+                          ) -> Dict[str, Any]:
         """
         Execute `LocalTSKRunner(image).analyse(...)` with progress logging
         routed through the event queue. Returns a dict shaped for the
         Deleted-Files tab: image path, partitions, fs info, deleted list,
-        recovered list, and the recovery folder.
+        recovered list (filtered by ``file_extensions`` if supplied), and
+        the recovery folder.
         """
         def on_log(line: str) -> None:
             self._q.put(("disk_log", {"text": f"  {line}"}))
@@ -1494,7 +1817,10 @@ class ForensicAgentApp(ctk.CTk):
                 }
             out_dir = tsk_runner.desktop_deleted_files_dir() / image.stem
             out_dir.mkdir(parents=True, exist_ok=True)
-            result = runner.analyse(out_dir, on_log=on_log, deleted_only=True)
+            result = runner.analyse(
+                out_dir, on_log=on_log, deleted_only=True,
+                file_extensions=file_extensions,
+            )
             return {
                 "image": str(image),
                 "image_name": image.name,
@@ -1505,6 +1831,9 @@ class ForensicAgentApp(ctk.CTk):
                 "recovered_files": result.get("recovered_files") or [],
                 "recovered_count": result.get("recovered_count", 0),
                 "total_deleted": result.get("total_deleted", 0),
+                "filtered_out_count": result.get("filtered_out_count", 0),
+                "file_types_requested": result.get("file_types_requested"),
+                "timeline": result.get("timeline") or [],
                 "tsk_available": True,
             }
         except Exception as e:
@@ -2145,9 +2474,47 @@ class ForensicAgentApp(ctk.CTk):
         modified = findings.get("modified_recent") or []
         trash_items = findings.get("system_trash") or []
         recovered_total = findings.get("recovered_total") or 0
+        recovery_cfg = findings.get("recovery_config") or {}
 
         wrap = ctk.CTkFrame(parent, fg_color="transparent")
         wrap.pack(fill="both", expand=True, padx=14, pady=14)
+
+        # ── Recovery configuration banner ────────────────────────────────
+        # Tells the investigator (and anyone reviewing the case later)
+        # which recovery strategy was selected for this scan. Without this
+        # block someone reading the report has to guess from the result
+        # tabs — and "0 PhotoRec carves" could mean PhotoRec failed OR
+        # the operator just unchecked it. Be explicit instead.
+        if recovery_cfg:
+            cfg_card = ctk.CTkFrame(wrap, fg_color=CLR_SURFACE,
+                                    corner_radius=10)
+            cfg_card.pack(fill="x", pady=(0, 14))
+            ctk.CTkLabel(
+                cfg_card, text="RECOVERY CONFIGURATION",
+                font=ctk.CTkFont(size=10, weight="bold"),
+                text_color=CLR_MUTED,
+            ).pack(anchor="w", padx=16, pady=(12, 2))
+            ctk.CTkLabel(
+                cfg_card, text=recovery_cfg.get("tool_label", "—"),
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color=CLR_ACCENT,
+            ).pack(anchor="w", padx=16)
+            sigs = recovery_cfg.get("signatures_selected") or []
+            if sigs:
+                sig_text = (
+                    f"Signatures: {', '.join(sigs)}  ·  "
+                    f"PhotoRec mode: {recovery_cfg.get('photorec_mode','fast')}"
+                )
+            else:
+                sig_text = (
+                    "No signature filter — PhotoRec would default to all 13. "
+                    f"PhotoRec mode: {recovery_cfg.get('photorec_mode','fast')}"
+                )
+            ctk.CTkLabel(
+                cfg_card, text=sig_text,
+                font=ctk.CTkFont(size=11), text_color=CLR_TEXT_DIM,
+                anchor="w", justify="left", wraplength=780,
+            ).pack(anchor="w", padx=16, pady=(2, 12))
 
         # Stat strip
         strip = ctk.CTkFrame(wrap, fg_color="transparent")
